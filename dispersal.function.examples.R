@@ -4,7 +4,7 @@
 #
 #
 # set WD:
-setwd("C:/Users/JLU-SU/Documents/PredictiveAliens/")
+setwd("C:/Users/JLU-SU/Nextcloud/Predictive Aliens/")
 
 # dispersal simulation function ====
 
@@ -14,8 +14,8 @@ library(dplyr)
 library(sf)
 library(gridprocess) # devtools::install_github("ethanplunkett/gridprocess")
 
-dispersal <- function(land.spread = TRUE,
-                      net.spread = FALSE,
+dispersal <- function(land.spread = TRUE, # is spread through the landscape allowed?
+                      net.spread = FALSE, # is spread through the network allowed?
                       
                       dist.ini, # initial distribution coordinates from where the species spreads through the landscape
                       spread.val, # how far can the species spread in gridprocess::rawspread?
@@ -56,52 +56,52 @@ dispersal <- function(land.spread = TRUE,
 ) {
   a.int <- Sys.time()
   eu.links <- eu.links %>% # filter for all paths which are connected with the chosen start.node
-    dplyr::filter(predicted >= min.tr) %>%
-    dplyr::filter(length <= max.dist)
+    dplyr::filter(predicted >= min.tr) %>% # filter all paths that have at least the given traffic volume
+    dplyr::filter(length <= max.dist) # filter all paths which are up to the max.dist length
   
-  ref.dist.r.agg <- aggregate(ref.dist.r, agg.acc.fact, fun = "mean", na.rm = TRUE) %>% # for accuracy measurement in the are of interest
+  ref.dist.r.agg <- aggregate(ref.dist.r, agg.acc.fact, fun = "mean", na.rm = TRUE) %>% # aggregate reference raster for accuracy measurement in the given area of interest (area of interest = acc.vect)
     terra::mask(vect(acc.vect))
   
   for(t.s in 1:time.steps){ # iterate over time-steps
     
     if(land.spread == TRUE){
       # start spread through landscape:
-      thresh.disp = spread.val * thresh.disp.factor
+      thresh.disp = spread.val * thresh.disp.factor # the threshold which has to be reached with the provided movement budget. depends on budget, resistance and distance to starting point.
       if(t.s == 1){
-        id.ini <- rowColFromCell(ref.raster, cellFromXY(ref.raster, st_coordinates(dist.ini))) # in matrix: x,y ; lon, lat; start sites for gridprocess::spread function
+        id.ini <- rowColFromCell(ref.raster, cellFromXY(ref.raster, st_coordinates(dist.ini))) # gets the row and column id of the start sites, needed for gridprocess::spread function
       } else {
-        id.ini <- id.ini.update
-        id.ini <- na.omit(id.ini)} # somehow there is always a very small number of cells which have as rows and column numbers NA. maybe it is because of the reduction or because there is a NA value in the cell? I don't know, but this prevents the function from crashing.
+        id.ini <- id.ini.update # if it is a later time.step than 1, not the initial but the reached points from the previous time.step are used as starting points.
+        id.ini <- na.omit(id.ini)} # somehow there is always a very small number of cells which have NA as rows and column numbers. maybe it is because of the reduction or because there is a NA value in the cell? I don't know, but this na.omit()-call prevents the function from crashing.
       
       empty.r <- ref.raster
       empty.r[!is.na(empty.r)] <- 0 # create empty raster with no connections or anything
       
-      for(i in 1:nrow(id.ini)){ # loop through all sites and determine where the species spreads to through the SDM layer
+      for(i in 1:nrow(id.ini)){ # loop through all start-sites and determine where the species spreads to from here through the resistance layer.
         if(i == 1){spread.m <- rawspread(x = gbm.r.inv$m,
                                          spread.value = spread.val,
                                          row = id.ini[i,1],
                                          col = id.ini[i,2]#,
-                                         #sd = sd # sd = bandwidth?  "In the standard Gaussian kernel, the “bandwidth” which controls the spread of the kernel is equal to one standard deviation and accounts for 39% of the kernel volume." from: doi:10.1007/s10980-018-0653-9 
+                                         #sd = sd # sd = bandwidth, not used here. "In the standard Gaussian kernel, the “bandwidth” which controls the spread of the kernel is equal to one standard deviation and accounts for 39% of the kernel volume." from: doi:10.1007/s10980-018-0653-9 
         )}else{
-          spread.m.c <- rawspread(x = gbm.r.inv$m,
+          spread.m.c <- rawspread(x = gbm.r.inv$m, # if it is not the first starting point then the output of this one will be added to the previous one, so that all reached cells are collected in one output raster. thus, the threshold can also be reached if a cell is reached just so from many starting locations.
                                   spread.value = spread.val,
                                   row = id.ini[i,1],
                                   col = id.ini[i,2]#,
-                                  #sd = sd # sd = bandwidth?  "In the standard Gaussian kernel, the “bandwidth” which controls the spread of the kernel is equal to one standard deviation and accounts for 39% of the kernel volume." from: doi:10.1007/s10980-018-0653-9 
+                                  #sd = sd # sd = bandwidth, not used here. "In the standard Gaussian kernel, the “bandwidth” which controls the spread of the kernel is equal to one standard deviation and accounts for 39% of the kernel volume." from: doi:10.1007/s10980-018-0653-9 
           )
           
           spread.m <- spread.m + spread.m.c # summarizes all consecutive steps (a cell can be reached from different source cells)
         }}
       
-      spread.m.r <- rast(spread.m, # is converted to raster for plotting; might be possible to delete this step to speed up process?
+      spread.m.r <- rast(spread.m, # the output matrix is converted to raster for plotting; might be possible to delete this step to speed up process?
                          extent = ext(ref.raster))
       
-      spread.m.r[spread.m.r < thresh.disp] <- NA # arbitrarily chosen threshold to determine which ones are considered as UNOCCUPIED cells
-      spread.m.r[spread.m.r >= thresh.disp] <- 1 # arbitrarily chosen threshold to determine which ones are considered as OCCUPIED cells
-      crs(spread.m.r) <- crs(ref.raster) 
+      spread.m.r[spread.m.r < thresh.disp] <- NA # below chosen threshold are considered as UNOCCUPIED cells
+      spread.m.r[spread.m.r >= thresh.disp] <- 1 # below chosen threshold are considered as OCCUPIED cells
+      crs(spread.m.r) <- crs(ref.raster) # has no crs after conversion from matrix to raster, so needs the reference crs.
       # end spread through landscape
       
-      if(t.s == 1){ # here classifiy on the empty raster as occupied or not with the spread result as mask
+      if(t.s == 1){ # all reached raster-cells are marked as such in the final result.r. this is updated at the end of each landscape spread iteration.
         dist.r <- mask(empty.r, spread.m.r, updatevalue = 1, inverse = TRUE)
         result.r <- mask(result.r, spread.m.r, updatevalue = 1, inverse = TRUE)
       } else {
@@ -110,6 +110,7 @@ dispersal <- function(land.spread = TRUE,
       }
       
       # reduce number of starting-points for consecutive time-step and update initial coordinates for raster spread:
+      # IMPORTANT: I HAD CASES WHERE THE REDUCTION DID NOT CHANGE THE RESULT AND OTHERS WHERE THE OUTPUT WAS VERY DIFFERENT.
       dist.r <- result.r
       dist.r[is.na(dist.r)] <- 0 # sets the NA cells to 0 so that terra::boundaries can find the edges of the occupied patches below, otherwise it also identifies german border as edge (identifes all class differences between c(NA, 0, 1))
       b <- boundaries(dist.r, classes = TRUE, inner = FALSE)
@@ -122,22 +123,26 @@ dispersal <- function(land.spread = TRUE,
       # end number reduction
     } else {}
     
-    if(net.spread == TRUE) {
+    if(net.spread == TRUE) { # net.spread = spread through traffic network (i.e. IDs of urban areas and the traffic flows between each pair)
       # start network spread:
       if(t.s == 1){} else {
-        ini.nodes <- updated.ua.i}
+        ini.nodes <- updated.ua.i} # updated.ua.i are the ones whcih were reached in a previous time.step.
       
       for(s.n in 1:length(ini.nodes)){ # loop over all ini.nodes
         start.node <- ini.nodes[s.n] # select the starting node of ini.nodes (s.n obviously has to be in starting.points table)
-        dest.eu.links <- eu.links %>% # filter for all paths which are connected with the chosen start.node
-          dplyr::filter(o.ID == start.node) 
+        dest.eu.links <- eu.links %>% 
+          dplyr::filter(o.ID == start.node) # filter for all paths which start at the start.node
         
         dest.nodes <- nodes %>% 
           dplyr::filter(ID %in%
-                          dest.eu.links$d.ID) # identify all nodes which are connected to start.node
+                          dest.eu.links$d.ID) # identify all nodes which are connected to start.node via the paths (i.e. via dest.eu.links).
         
         updated.ua.i <- dest.nodes$ID
         
+        #
+        #
+        #
+        # useless:
         # result generation for consecutive steps:
         # put into if statement above to use only if t.s > 1 to check if optim can better deal with it then
         id.ini.update <- rbind(id.ini.update, # these are used in consecutive landspread.
@@ -145,6 +150,10 @@ dispersal <- function(land.spread = TRUE,
                                               cellFromXY(ref.raster, st_coordinates(dplyr::filter(nodes, ID %in% updated.ua.i)))
                                )
         )
+        #
+        #
+        #
+        
       }
       
       
@@ -153,7 +162,7 @@ dispersal <- function(land.spread = TRUE,
       #
       #
       #
-      # also needs a statement to sample from the distributional raster the nodes which lie in invaded territory - maybe optional to do this.
+      # sample nodes from the distributional landscape raster which lie in invaded territory - optional to do this. allows the species to switch from the landscape to the traffic network. the opposite way is always active but can be limited with spread.value and thresh.disp.fact.
       if(sample.nodes.from.raster == TRUE) {
         additional.nodes <- tibble(ID = nodes$ID, 
                                    is.occupied = terra::extract(result.r, vect(nodes), 
@@ -192,40 +201,16 @@ dispersal <- function(land.spread = TRUE,
     #  nrow()
     #accuracy <- 1 - (TP + TN) / (TP + FP + FN + TN)
     
-    if(regional.approach == TRUE){
-      ref.pol <- st_as_sf(as.polygons(result.r)) %>%
-        dplyr::filter(layer == 1)
-      
-      #gadm.2.ref.occ <- gadm.2.ref %>% 
-      #  dplyr::filter(is.na(pred.occ)) # subset for the ones which are not already marked as occupied and by this avoid to do this step in every iteration.
-      gadm.2.ref.occ <- gadm.2.ref[lengths(st_intersects(gadm.2.ref, ref.pol)) > 0, ] # including this step first greatly reduces computing time by subsetting to one which are overlapping with predicted occupied area.
-      gadm.2.ref.occ <- as_tibble(st_intersection(ref.pol, gadm.2.ref.occ)) 
-      
-      gadm.2.ref.occ$occ.area <- units::drop_units(st_area(gadm.2.ref.occ$geometry))
-      gadm.2.ref.occ <- gadm.2.ref.occ %>% 
-        dplyr::select(id, occ.area, area)
-      
-      gadm.2.ref.occ <- gadm.2.ref.occ[gadm.2.ref.occ$pred.occ <- 100/gadm.2.ref.occ$area * gadm.2.ref.occ$occ.area > 10,]
-      if(length(gadm.2.ref.occ) > 0){
-        gadm.2.ref[c(unique(gadm.2.ref.occ$id)), ]$pred.occ <- 1
-      } else {}
-      
-      reg.update <- gadm.2.ref %>% 
-        dplyr::filter(pred.occ == 1)
-      result.r <- terra::mask(result.r, vect(reg.update), updatevalue = 1, inverse = TRUE, touches = FALSE)
-    } else {}#touches = FALSE so that polygon boundaries do not cause neighboring regions to be erroneously invaded
+
     
-    if(!is.null(unsuitability.mask)){
-      result.r[mask] <- 0
+    if(!is.null(unsuitability.mask)){ # if there is an unsuitability mask provided all the cells which have a habitat suitability below a certain threshold are set to unoccupied at the end of each iteration. this way, a species might cross an unsuitable habitat but it can not establich there an each population will be deleted at the end of each time.step.
+      result.r[mask] <- 0 # the unsuitability mask has IDs of each cells which were determined as being unsuitable (making an unsuitability mask is a preparatory step and not part of this function).
     } else {}
     
-    #if(t.s == time.steps){
-      if(regional.approach.acc == TRUE){
+    if(regional.approach.acc == TRUE){ # i tested this regional approach to determine the accuracy on a regional level instead of on a pixel level. However, the result is not convincing and the process is slow. is kept here just in case....
         ref.pol <- st_as_sf(as.polygons(result.r)) %>%
           dplyr::filter(layer == 1)
         
-        #gadm.2.ref.occ <- gadm.2.ref %>% 
-        #  dplyr::filter(is.na(pred.occ)) # subset for the ones which are not already marked as occupied and by this avoid to do this step in every iteration.
         gadm.2.ref.occ <- gadm.2.ref[lengths(st_intersects(gadm.2.ref, ref.pol)) > 0, ] # including this step first greatly reduces computing time by subsetting to one which are overlapping with predicted occupied area.
         gadm.2.ref.occ <- as_tibble(st_intersection(ref.pol, gadm.2.ref.occ)) 
         
@@ -248,40 +233,35 @@ dispersal <- function(land.spread = TRUE,
         
         accuracy <- 1 - (TP + TN) / (TP + FP + FN + TN)
         
-      } else {
-        # accuracy measurement with whole raster (used here because I resampled the raster to 10 x 10km resolution to test if that improves training and prediction):
-        result.r.agg <- aggregate(result.r, agg.acc.fact, fun = "mean", na.rm = TRUE) %>% 
+      } else {# accuracy measurement with whole raster :
+        result.r.agg <- aggregate(result.r, agg.acc.fact, fun = "mean", na.rm = TRUE) %>% # changing the resolution of the reference and output rasters can change the accuracy result. the ref.raster is aggregated and masked only once at beginning of the function loop
           terra::mask(vect(acc.vect))
         
-        # ref raster is aggregated and masked only once at beginning of the function loop
-        
-        ref.dist.r.agg <- ifel(ref.dist.r.agg >= 0.5, 1, ref.dist.r.agg)
+        ref.dist.r.agg <- ifel(ref.dist.r.agg >= 0.5, 1, ref.dist.r.agg) # the mean function in aggregate makes cell values which are between 0 and 1 so it is made to 0 and 1 here again.
         ref.dist.r.agg <- ifel(ref.dist.r.agg < 0.5, 0, ref.dist.r.agg)
 
         result.r.agg <- ifel(result.r.agg >= 0.5, 1, result.r.agg)
         result.r.agg <- ifel(result.r.agg < 0.5, 0, result.r.agg)
         
+        ref.neg <- cells(ref.dist.r.agg, c(0))[[1]] # cell.IDs of reference absences
+        ref.pos <- cells(ref.dist.r.agg, c(1))[[1]] # cell.IDs of reference presences
+        pred.neg <- cells(result.r.agg, c(0))[[1]] # cell.IDs of predicted absences
+        pred.pos <- cells(result.r.agg, c(1))[[1]] # cell.IDs of predicted presences
         
-        ref.neg <- cells(ref.dist.r.agg, c(0))[[1]] # all reference cells that are 0
-        ref.pos <- cells(ref.dist.r.agg, c(1))[[1]] # all reference cells that are 1
-        pred.neg <- cells(result.r.agg, c(0))[[1]]
-        pred.pos <- cells(result.r.agg, c(1))[[1]]
+        TP <- sum(pred.pos %in% ref.pos) # uses cell.IDs to check which are correct/false
+        TN <- sum(pred.neg %in% ref.neg) # uses cell.IDs to check which are correct/false
+        FP <- sum(pred.pos %in% ref.neg) # uses cell.IDs to check which are correct/false
+        FN <- sum(pred.neg %in% ref.pos) # uses cell.IDs to check which are correct/false
         
-        TP <- sum(pred.pos %in% ref.pos)
-        TN <- sum(pred.neg %in% ref.neg)
-        FP <- sum(pred.pos %in% ref.neg)
-        FN <- sum(pred.neg %in% ref.pos)
-        
-        accuracy <- 1 - (TP + TN) / (TP + FP + FN + TN)
+        accuracy <- 1 - (TP + TN) / (TP + FP + FN + TN) # is inverted because the optim algorithm needed it this way.
       }
-    #} else {}
     
     gc()
     print(paste("time.step", t.s, "out of", time.steps, "done"))
     print(Sys.time() - a.int)
     if(t.s == 1){
       plot.stack <- result.r
-      accuracy.list <- tibble(accuracy = accuracy, 
+      accuracy.list <- tibble(accuracy = accuracy, # all this is in the output of the function.
                               spread.val = spread.val,
                               thresh.disp.factor = thresh.disp.factor,
                               time.step = t.s,
@@ -292,7 +272,7 @@ dispersal <- function(land.spread = TRUE,
                               max.dist = max.dist)
     } else {
       plot.stack <- c(plot.stack, result.r)
-      accuracy.list.up <- tibble(accuracy = accuracy, 
+      accuracy.list.update <- tibble(accuracy = accuracy, 
                               spread.val = spread.val,
                               thresh.disp.factor = thresh.disp.factor,
                               time.step = t.s,
@@ -302,7 +282,7 @@ dispersal <- function(land.spread = TRUE,
                               min.tr = min.tr, 
                               max.dist = max.dist)
       accuracy.list <- bind_rows(accuracy.list, 
-                                 accuracy.list.up)
+                                 accuracy.list.update)
       }
   }
   if(plot.result == TRUE){
