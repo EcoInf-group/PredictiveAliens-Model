@@ -866,6 +866,283 @@ plot(out[[4]])
 ###
 
 
+# Myocastor coypus ====
+## data preparation ====
+### native and non.native areas ====
+# Info from Manuelas Database:
+native <- c("Argentina", "Bolivia", "Brazil", "Chile", "Paraguay", "Uruguay") # Sardegna = Sardinia, Corse = Corsica; "Morocco", "Tunisia","Algeria" left out because here only europe 
+non.native <- c("Albania", "Austria", "Belarus", "Belgium", "Bulgaria", "Croatia", "Czechia",
+                "Denmark", "Finland", "France", "Germany", "Greece", "Hungary", "Ireland", "Italy", "Latvia",
+                "Luxembourg", "Netherlands", "Norway", "Portugal", "Poland", "Romania",
+                "San Marino", "Sardinia", "Serbia", "Sicily", "Slovakia", "Slovenia", "Spain", "Sweden",
+                "Switzerland", "Slovenia", "Turkey", "Ukraine", "United Kingdom",
+                "Estonia", "Lithuania", "Bosnia and Herzegovina", "Montenegro", "Kosovo",
+                "North Macedonia", "Liechtenstein", "Andorra") 
+
+
+
+gadm.0 <- st_read("simulation input data/world_gadm_410-levels.gpkg", 
+                  layer = "ADM_0") %>%
+  st_make_valid()
+
+gadm.0 <- gadm.0 %>% 
+  dplyr::filter(COUNTRY %in% c(non.native, native))
+gadm.0.native <- gadm.0 %>% 
+  dplyr::filter(COUNTRY %in% native)
+gadm.0.n.native <- gadm.0 %>% 
+  dplyr::filter(COUNTRY %in% non.native)
+
+sf_use_s2(FALSE)
+gadm.2 <- st_read("simulation input data/world_gadm_410-levels.gpkg", 
+                  layer = "ADM_2") %>%
+  dplyr::filter(COUNTRY %in% c(native, non.native)) %>%
+  st_make_valid() %>% 
+  st_buffer(0)
+sf_use_s2(TRUE)
+
+gadm.2.native <- gadm.2 %>% 
+  dplyr::filter(COUNTRY %in% native)
+gadm.2.n.native <- gadm.2 %>% 
+  dplyr::filter(COUNTRY %in% non.native)
+
+waterways.add <- rast("simulation input data/myocastor/waterways.raster.tiff") 
+gbm.r <- rast("simulation input data/myocastor/biomod2_GBM.update.bio02.bio6.bio10.bio15.bio17.LC.pop.gbif and anna.tif")
+### occurrence data (anna & gbif) ====
+myo.coy <- read.csv("simulation input data/myocastor/M coypus gbif 13082025.csv", 
+                    sep = "\t")
+myo.coy <- tibble(myocastor = 1,
+                  longitude = myo.coy$decimalLongitude,
+                  latitude = myo.coy$decimalLatitude,
+                  year = myo.coy$year) %>% 
+  na.omit()
+
+a.s.rec <- st_read("simulation input data/myocastor/nutria_occurrence_records_1980_2018 anna schertler.gpkg")###
+points <- st_centroid(a.s.rec) %>% 
+  st_transform("epsg:4326")
+
+points.add <- tibble(myocastor = 1,
+                     longitude = st_coordinates(points)[,1],
+                     latitude = st_coordinates(points)[,2],
+                     year = points$year) %>% 
+  na.omit()
+
+myo.coy.all <- dplyr::bind_rows(myo.coy, points.add)
+myo.coy.xy <- st_as_sf(myo.coy.all, coords = c("longitude", "latitude"), crs = 4326)
+myo.coy.xy.ini <- myo.coy.xy %>% 
+  dplyr::filter(year <= 1980)
+
+one.rec.per.grid.cell <- function(ref.raster, occurences) {
+  cells <- cellFromXY(ref.raster, occurences) %>% unique()
+  coords <- xyFromCell(ref.raster, cells)
+}
+
+coords.matrix.ini <- one.rec.per.grid.cell(ref.raster = gbm.r, 
+                                           occurences = cbind(lon = st_coordinates(myo.coy.xy.ini)[,1], lat = st_coordinates(myo.coy.xy.ini)[,2])
+                                           ) %>% 
+  na.omit()
+
+myo.coy.xy.ini <- st_as_sf(as_tibble(coords.matrix.ini), 
+                           coords = c("x", "y"), 
+                           crs = 4326)
+
+coords.matrix <- one.rec.per.grid.cell(ref.raster = gbm.r, 
+                                       occurences = cbind(lon = st_coordinates(myo.coy.xy)[,1], lat = st_coordinates(myo.coy.xy)[,2])
+                                       ) %>% 
+  na.omit()
+myo.coy.xy <- st_as_sf(as_tibble(coords.matrix), coords = c("x", "y"), crs = 4326)
+
+### read SDM map & make resistance raster for gridprocess::rawpsread() ====
+
+names(gbm.r) <- "layer"
+gbm.r <- terra::mask(gbm.r,vect(gadm.0))
+
+i.mask <- gbm.r
+i.mask[i.mask != 0] <- 1
+
+waterways.add <- mask(waterways.add, i.mask, inverse = FALSE)
+
+gbm.r <- subst(gbm.r, NA, 0)
+gbm.r <- 1 / max(values(gbm.r), na.rm = TRUE) * gbm.r # with this step it is set to a scale of 0 to 1 irrespective of the transformation
+waterways.add[waterways.add != 0] <- 0.4 # to adjust if needed, also higher than the cut off threshold below
+gbm.r <- gbm.r + waterways.add
+gbm.r <- subst(gbm.r, NA, 0)
+gbm.r <- aggregate(gbm.r, 5, fun = mean, na.rm = TRUE) # making the raster more coarse; INCLUDE IN ASGRID() BELOW!!
+
+mask.thresh <- 0.5 
+#mask <- aggregate(gbm.r, 5, fun = "mean", na.rm = TRUE)
+# gets the cell numbers; these are then set to 0 (i.e. unoccupied in the result.r in the dispersal() function)
+
+
+gbm.r[gbm.r <= mask.thresh] <- 0
+# with the extreme cut.off value of 0.5 it is probably not necessary to make a nonlinear conversion
+# to reconstruct the final reference distribution
+# gbm.r <- gbm.r^2 # exponential conversion instead of linear.
+
+mask <- which.lyr(gbm.r[[1]] <= mask.thresh) %>%  # gets a spatraster that has only cells which are 0 in gbm.r (i.e. which are unsuitable)
+  # terra::mask(vect(gadm.0)) %>%           # crops it to the area of interest -> CHECK IF NECESSARY
+  cells()      
+
+gbm.r <- 1 / max(values(gbm.r), na.rm = TRUE) * gbm.r # with this step it is set to a scale of 0 to 1 irrespective of the transformation
+
+gbm.r.inv <- gbm.r*-1 + max(values(gbm.r[[1]]), na.rm = TRUE) # invert raster for creation of resistance matrix
+limit <- max(values(gbm.r.inv), na.rm = TRUE)
+#spread.limit <- limit*100 # set value for areas which are not crossable
+gbm.r.inv <- subst(gbm.r.inv, # must not have NAs for the function below, so replace with spread.limit to make these areas not crossable
+                   1, 
+                   9999) # the final 
+# plot(gbm.r.inv) # no network visible in plot anymore if limit much higher than maximum value in network becaus of color-scale. reduce spread.limit to make it visible again.
+gbm.r.inv <- asgrid(gbm.r.inv, # convert to grid for spread function
+                    xll = xmin(gbm.r.inv),
+                    yll = ymin(gbm.r.inv),
+                    cellsize = 1000) # update cellsize with the aggregate factor * 1000m
+#
+#
+#
+### plot to check if all data align and see what they look like. ====
+plot(gbm.r)
+plot(myo.coy.xy.ini[,1], add = TRUE , col = "yellow", pch = 19)
+plot(myo.coy.xy[,1], add = TRUE, col = "red", pch = 19)
+#
+#
+#
+
+
+
+
+#
+#
+#
+### read in traffic network ====
+eu.links <- st_read("simulation input data/1031.1165ua.GHS.800km.gpkg", # this is a shapefile with all least-cost paths (i.e. open street map routes) between all pairs of urban areas
+                    layer = "1031.1165ua.GHS.800km.exp.predict")
+eu.links$length <- eu.links$original.dist
+eu.links$link.id <- 1:nrow(eu.links) # paths need an ID for easier use later
+eu.links <- eu.links %>% 
+  rename(o.ID = start.ID)
+eu.links <- eu.links %>% 
+  rename(d.ID = dest.ID)
+
+# crop the eu.links to the area of interest to reduce computing time and avoid errors when they lead out of the cropped rasters:
+eu.link.IDs <- eu.links[lengths(st_intersects(eu.links, gadm.0)) > 0, ]$link.id # no need to use gadm.2 as well, all are here
+eu.links <- eu.links %>% dplyr::filter(link.id %in% eu.link.IDs)
+
+eu.links.geom <- eu.links # to save it with geometries for later plotting
+eu.links <- st_drop_geometry(eu.links) # geometries not needed for use in the dispersal() function.
+#
+#
+#
+
+#
+#
+#
+### read in urban areas ====
+nodes <- st_read("simulation input data/eur.urban.areas.gpkg", 
+                 layer = "GHS.29.10.2025.points")
+nodes <- nodes[lengths(st_intersects(nodes, gadm.0)) > 0, ] # crop the nodes to the area of interest to reduce computing time and avoid errors when they lead out of the cropped rasters
+# no need to use gadm.2, all are here
+#
+#
+#
+
+
+#
+#
+#
+### define input ====
+empty.r <- gbm.r 
+empty.r[!is.na(empty.r)] <- 0 # create empty raster with no connections or anything
+
+ini.dist.r <- empty.r %>% 
+  terra::mask(vect(st_buffer(myo.coy.xy.ini, 10000)),
+              updatevalue = 1,
+              inverse = TRUE)
+
+ref.dist.r <- ini.dist.r %>% # used as reference to calculate the accuracy of the dispersal()-output.
+  terra::mask(vect(st_buffer(myo.coy.xy, 10000)),
+              updatevalue = 1,
+              inverse = TRUE) 
+
+nodes$occ <- terra::extract(ini.dist.r, vect(nodes))[,2]
+ini.nodes <- nodes %>% 
+  dplyr::filter(occ == 1)
+ini.nodes <- ini.nodes$ID
+#
+#
+#
+
+### run function ====
+agg.acc.fact <-  10
+acc.vect <- gadm.0
+ext(ref.dist.r) == ext(empty.r)
+ref.dist.r.agg <- aggregate(ref.dist.r, agg.acc.fact, fun = "mean", na.rm = TRUE) %>% 
+  terra::mask(vect(acc.vect))
+ref.dist.r.agg <- ifel(ref.dist.r.agg >= 0.5, 1, ref.dist.r.agg)
+ref.dist.r.agg <- ifel(ref.dist.r.agg < 0.5, 0, ref.dist.r.agg)
+
+ini.nodes <-  ini.nodes
+spread.val <- 1
+nodes.cut.off <- 0.1
+time.steps <- 4
+thresh.disp.factor <- 0.25
+min.tr <- quantile(eu.links$predicted, probs = c(0.50), na.rm = TRUE)[[1]] # probs defines which quantile of the traffic volumes is used as minimum traffic value that filter or paths which are used in the traffic network.
+max.dist <- 350000 # paths in the network longer than this will not be used, in meter.
+
+out <- dispersal(
+  land.spread = TRUE,
+  net.spread = TRUE,
+  spread.val = spread.val,
+  nodes.cut.off = nodes.cut.off,
+  thresh.disp.factor = thresh.disp.factor, 
+  time.steps = time.steps,
+  dist.ini = myo.coy.xy.ini,
+  ini.nodes = ini.nodes,
+  ref.raster = empty.r,
+  result.r = empty.r,
+  dist.red = FALSE,
+  ref.dist.r = ref.dist.r,
+  dist.red.param = 2,
+  plot.result = TRUE, 
+  sample.nodes.from.raster = TRUE,
+  regional.approach = FALSE, 
+  regional.approach.acc = FALSE,
+  unsuitability.mask = mask,
+  acc.vect = acc.vect,
+  agg.acc.fact = agg.acc.fact,
+  min.tr = min.tr,
+  max.dist = max.dist
+)
+
+par(mfrow = c(2,2))
+plot(mask(ini.dist.r, vect(gadm.0)), 
+     main = "initial distribution", 
+     background = "darkgrey")
+plot(mask(out[[1]],vect(gadm.0)), 
+     main = paste(
+       "s.v =", spread.val, ";",
+       "\nn.c.o =", nodes.cut.off, ";",
+       "t.s =", time.steps, ";",
+       "\nt.d.f =", thresh.disp.factor, ";",
+       "transformation ²"), 
+     background = "darkgrey")
+plot(mask(out[[1]],vect(gadm.0)), 
+     main = paste(
+       "s.v =", spread.val, ";",
+       "\nn.c.o =", nodes.cut.off, ";",
+       "t.s =", time.steps, ";",
+       "\nt.d.f =", thresh.disp.factor, ";",
+       "ini.points = green ;",
+       "\nreached ua (sim.) = red"), 
+     background = "darkgrey")
+plot(myo.coy.xy.ini, add = TRUE, col = "green") # starting points
+plot(out[[2]], add = TRUE, col = "red") # reached ua
+plot(mask(ref.dist.r, vect(gadm.0)), 
+     main = "final reference distribution", 
+     background = "darkgrey")
+# plot(out[[2]], add = TRUE, col = "red", pch = 19) # reached ua
+#summary(out[[2]]$tot.prop.traff)
+out[[3]]
+plot(mask(out[[4]][[4]],vect(gadm.0)),
+     background = "darkgrey")
 
 
 #
