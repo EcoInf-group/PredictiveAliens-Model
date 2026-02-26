@@ -1,11 +1,3 @@
-#
-#
-#
-#
-#
-# set WD:
-setwd("C:/Users/JLU-SU/Nextcloud/Predictive Aliens/")
-
 # dispersal simulation function ------------------------------------------------
 
 # load packages:
@@ -14,35 +6,22 @@ library(dplyr)
 library(sf)
 library(gridprocess) # devtools::install_github("ethanplunkett/gridprocess")
 
-dispersal <- function(land.spread = TRUE, # is spread through the landscape allowed?
-                      net.spread = FALSE, # is spread through the network allowed?
+dispersal <- function(land.spread = TRUE, # logical, is spread through the landscape allowed?
+                      net.spread = FALSE, # logical, is spread through the network allowed?
                       
                       dist.ini, # initial distribution coordinates from where the species spreads through the landscape
-                      spread.val, # how far can the species spread in gridprocess::rawspread?
-                      thresh.disp.factor, # how much of the spread.val must a pixel receive to be treated as occupied?
+                      spread.val = 1, # how far can the species spread in gridprocess::rawspread?
+                      thresh.disp.factor = 0.9, # how much of the spread.val must a pixel receive to be treated as occupied?
                       ini.nodes, # initial urban areas from which the species can spread through the traffic network AND the landscape
-                      #thresh.nodes, # not used anymore: threshold for which cells from spread are treated as origin in following step? 
                       ref.raster, # reference raster (resolution etc.) for the output
                       result.r, # empty raster that will be updated after each time.step and thus turned into the result raster.
+                      
                       initiation = 1, # the initial traffic budget that each used node gets per time.step. this will then be distributed among all outgoing paths relative to the traffic flow on each path.
-                      # I tried to scale this with gdp of the respecive node, but that did not improve the output. OPEN FOR DISCUSSION.
+                      # I tried to scale this with gdp of the respective node, but that did not improve the output. OPEN FOR DISCUSSION.
                       
-                      nodes.cut.off, # not used anymore, perhaps OPEN FOR DISCUSSION:
-                      # states how much traffic urban area "y" has to receive from urban area "x" to be treated as invaded. 
-                      # each urban area gets an outgoing traffic budget of 1 and this budget is then distributed among all links going from this urban 
-                      # area according to the traffic volume on this link. if the total traffic volume on all links going from urban area x is 1000 and the 
-                      # link to urban area y has a volume of 10, then urban area y receives 1/1000*10 = 0.01 and it is checked whether or not this is above 
-                      # the threshold for being treated as invaded. 
-                      
-                      time.steps, # how many steps should the simulation run?
-                      dist.red = FALSE, 
-                      # in each time.step an output raster is generated with areas which are occupied and from these areas the border cells are usedas starting points for further landscape spread in the following step.
-                      # if dist.red = TRUE then only every xth cell is used as starting point with x = dist.red.param (next argument). greatly reduces computing time BUT MIGHT CHANGE OUTPUT PATTERNS!
-                      dist.red.param, # define how strongly the initial cells should be reduced, numeric; 
-                      # e.g. if 2, then every second cell/coordinate pair is chosen from the ini.update matrix
-                      
+                      time.steps = 2, # how many iterations should the simulation run?
+
                       ref.dist.r, # reference raster with the final known distribution with cells being present (1) or absent (0), used for accuracy calculation
-                      # (accuracy <- (True Positives + True Negatives) / (True Positives + False Positives + False Negatives + True Negatives))
                       # the result.r output raster will be compared with this and the values needed for accuracy calculation derived from the comparison.
                       
                       plot.result = TRUE, # does not automatically plot anything, just makes an output raster if TRUE
@@ -50,18 +29,13 @@ dispersal <- function(land.spread = TRUE, # is spread through the landscape allo
                       sample.nodes.from.raster = TRUE, # if TRUE then urban areas which are within the occupied areas on the result raster will be treated as 
                       # occupied and can serve as starting point in the traffic network. this allows a species to enter the traffic network from the landscape.
                       
-                      regional.approach = FALSE, # not recommended. here calculations are based on gadm-0 region levels, but gadm will have to be provided and it takes ages...
-                      regional.approach.acc = FALSE, # calculates accuracy not on raster cells but based on gadm regions. however, i recommend to provided an aggregated
-                      # raster to use for calculation since it is much faster and ecologically more meaningful than usein administrative boundaries
-                      # left here in case there is room for improvement to make this approach usable.
+                      unsuitability.mask = NULL, # if provided then every cell which is provided will be set to unoccupied at end of each time step. can be used
+                      # to make sure that unsuitable cells will not become occupied. they might still be crossed though.
                       
-                      unsuitability.mask = NULL, # if provided then every cell which is provided will be set to unoccupied at end of each timestep. can be used
-                      # to make sure that unsuitable cells will not become occupied. they can still be crossed though.
-                      
-                      acc.vect, # accuracy vector; area inside which the accuracy will be calulated.
-                      agg.acc.fact = 1, # how much should the output be aggregated (too avoid overly fine-scaled output and accuracy calculations)
-                      min.tr, # traffic network: minimum traffic volume that paths must have to be used at all.
-                      max.dist # traffic network: maximum length that a path can have to be used (longer distances will not be traveled)
+                      acc.vect = NULL, # accuracy vector; area inside which the accuracy will be calculated.
+                      agg.acc.fact = 1, # how much should the output be aggregated before calculation of accuracy (too avoid overly fine-scaled output and accuracy calculations)?
+                      min.tr = 0, # traffic network: minimum traffic volume that paths must have to be used at all.
+                      max.dist = 500000# traffic network: maximum length that a path can have to be used (longer distances than this value will not be traveled)
 ) {
   a.int <- Sys.time() # just to keep track of how much time the simulation needs.
   
@@ -69,8 +43,18 @@ dispersal <- function(land.spread = TRUE, # is spread through the landscape allo
     dplyr::filter(predicted >= min.tr) %>% # filter all paths that have at least the given traffic volume
     dplyr::filter(length <= max.dist) # filter all paths which are up to the max.dist length
   
+  if(agg.acc.fact != 1){
+    ref.dist.r.agg <- aggregate(ref.dist.r, agg.acc.fact, fun = "mean", na.rm = TRUE) # aggregate the reference raster to avoid being overly fine-scaled
+    ref.dist.r.agg <- ifel(ref.dist.r.agg >= 0.5, 1, ref.dist.r.agg) # make binary (fun = "mean" in aggregate makes non-binary values)
+    ref.dist.r.agg <- ifel(ref.dist.r.agg < 0.5, 0, ref.dist.r.agg) # make binary (fun = "mean" in aggregate makes non-binary values)
+  } else {
+    ref.dist.r.agg <- ref.dist.r}
+  
+  if(!is.null(acc.vect)){
+    ref.dist.r.agg <- terra::mask(ref.dist.r.agg, vect(acc.vect))
+  } else{}
+  
   for(t.s in 1:time.steps){ # iterate over time-steps
-    
     # start spread through landscape:
     if(land.spread == TRUE){
       thresh.disp = spread.val * thresh.disp.factor # the threshold which has to be reached with the provided movement budget. depends on budget, resistance and distance to starting point.
@@ -134,22 +118,7 @@ dispersal <- function(land.spread = TRUE, # is spread through the landscape allo
       #
       #
       
-      #
-      #
-      #
-      # optional: reduce number of starting-points for consecutive time-step and update initial coordinates for raster spread:
-      # IMPORTANT: I HAD CASES WHERE THE REDUCTION DID NOT CHANGE THE RESULT AND OTHERS WHERE THE OUTPUT WAS VERY DIFFERENT.
-      if (dist.red == TRUE) {
-        id.ini.update <- id.ini.update[c(seq(
-          from = 0,
-          to = nrow(id.ini.update),
-          by = dist.red.param
-        )), ]
-      } else {
-      } # takes only each nth cell (e.g. dist.red.param = 2 then each second cell)
-      # end number reduction
-    
-    } else {} # better do nothing here.
+    } else {} 
     #
     #
     #
@@ -215,27 +184,7 @@ dispersal <- function(land.spread = TRUE, # is spread through the landscape allo
     #
     #
     
-    # accuracy measurement with random sub-samples of cells instead of whole raster to decrease the influence of the huge amount of 0s, analogue to pseudo-absence sampling:
-    # currently not used but may be another option for accuracy calculation.
-    #AUC.t <- tibble(cell = p.a.cells,
-    #                ref = ref.dist.r[[1]][p.a.cells],
-    #                pred = result.r[[1]][p.a.cells])
-    #TP <- AUC.t %>% dplyr::filter(AUC.t[,2] == 1 &
-    #                                AUC.t[,3] == 1) %>%
-    #  nrow()
-    #TN <- AUC.t %>% dplyr::filter(AUC.t[,2] == 0 &
-    #                                AUC.t[,3] == 0) %>%
-    #  nrow()
-    # 
-    #FN <- AUC.t %>% dplyr::filter(AUC.t[,2] == 1 &
-    #                                AUC.t[,3] == 0) %>%
-    #  nrow()
-    #FP <- AUC.t %>% dplyr::filter(AUC.t[,2] == 0 &
-    #                                AUC.t[,3] == 1) %>%
-    #  nrow()
-    #accuracy <- 1 - (TP + TN) / (TP + FP + FN + TN)
     
-
     #
     #
     #
@@ -247,68 +196,31 @@ dispersal <- function(land.spread = TRUE, # is spread through the landscape allo
     #
     #
     
+    # accuracy measurement with whole raster, better use this option
+    if(!is.null(acc.vect)){
+      result.r.agg <- aggregate(result.r, agg.acc.fact, fun = "mean", na.rm = TRUE) %>% # changing the resolution of the reference and output rasters can change the accuracy result. the ref.raster is aggregated and masked only once at beginning of the function loop
+        terra::mask(vect(acc.vect))
+    } else {
+      result.r.agg <- aggregate(result.r, agg.acc.fact, fun = "mean", na.rm = TRUE) # changing the resolution of the reference and output rasters can change the accuracy result. the ref.raster is aggregated and masked only once at beginning of the function loop
+    }
+
+    result.r.agg <- ifel(result.r.agg >= 0.5, 1, result.r.agg)
+    result.r.agg <- ifel(result.r.agg < 0.5, 0, result.r.agg)
+        
+    ref.neg <- cells(ref.dist.r.agg, c(0))[[1]] # cell.IDs of reference absences
+    ref.pos <- cells(ref.dist.r.agg, c(1))[[1]] # cell.IDs of reference presences
+    pred.neg <- cells(result.r.agg, c(0))[[1]] # cell.IDs of predicted absences
+    pred.pos <- cells(result.r.agg, c(1))[[1]] # cell.IDs of predicted presences
+        
+    TP <- sum(pred.pos %in% ref.pos) # uses cell.IDs to check which are correct/false
+    TN <- sum(pred.neg %in% ref.neg) # uses cell.IDs to check which are correct/false
+    FP <- sum(pred.pos %in% ref.neg) # uses cell.IDs to check which are correct/false
+    FN <- sum(pred.neg %in% ref.pos) # uses cell.IDs to check which are correct/false
+        
+    accuracy <- (TP + TN) / (TP + FP + FN + TN)
     #
     #
     #
-    # option how to calculate accuracy:
-    if(regional.approach.acc == TRUE){ # i tested this regional approach to determine the accuracy on a regional level instead of on a pixel level. However, the result is not convincing and the process is slow. is kept here just in case....
-      ref.pol <- st_as_sf(as.polygons(result.r)) %>%
-        dplyr::filter(layer == 1)
-      
-      gadm.2.ref.occ <- gadm.2.ref[lengths(st_intersects(gadm.2.ref, ref.pol)) > 0, ] # including this step first greatly reduces computing time by subsetting to one which are overlapping with predicted occupied area.
-      gadm.2.ref.occ <- as_tibble(st_intersection(ref.pol, gadm.2.ref.occ))
-      
-      gadm.2.ref.occ$occ.area <- units::drop_units(st_area(gadm.2.ref.occ$geometry))
-      gadm.2.ref.occ <- gadm.2.ref.occ %>%
-        dplyr::select(id, occ.area, area)
-      
-      gadm.2.ref.occ <- gadm.2.ref.occ[gadm.2.ref.occ$pred.occ <- 100 /
-                                         gadm.2.ref.occ$area * gadm.2.ref.occ$occ.area > 10, ]
-      if (length(gadm.2.ref.occ) > 0) {
-        gadm.2.ref[c(unique(gadm.2.ref.occ$id)), ]$pred.occ <- 1
-      } else {
-      }
-      
-      gadm.2.ref.acc <- gadm.2.ref %>%
-        dplyr::filter(accu.calc == 1) %>%
-        dplyr::filter(COUNTRY %in% non.native) # accuracy only calculated in non.native regions
-      TP <- gadm.2.ref.acc %>% dplyr::filter(occupied == 1 &
-                                               pred.occ == 1) %>% nrow()
-      TN <- gadm.2.ref.acc %>% dplyr::filter(occupied == 0 &
-                                               pred.occ == 0) %>% nrow()
-      FP <- gadm.2.ref.acc %>% dplyr::filter(occupied == 0 &
-                                               pred.occ == 1) %>% nrow()
-      FN <- gadm.2.ref.acc %>% dplyr::filter(occupied == 1 &
-                                               pred.occ == 0) %>% nrow()
-      
-      accuracy <- 1 - (TP + TN) / (TP + FP + FN + TN)
-        
-      } else {# accuracy measurement with whole raster, better use this option:
-        result.r.agg <- aggregate(result.r, agg.acc.fact, fun = "mean", na.rm = TRUE) %>% # changing the resolution of the reference and output rasters can change the accuracy result. the ref.raster is aggregated and masked only once at beginning of the function loop
-          terra::mask(vect(acc.vect))
-        
-        ref.dist.r.agg <- ifel(ref.dist.r.agg >= 0.5, 1, ref.dist.r.agg) # the mean function in aggregate makes cell values which are between 0 and 1 so it is made to 0 and 1 here again.
-        ref.dist.r.agg <- ifel(ref.dist.r.agg < 0.5, 0, ref.dist.r.agg)
-        
-        result.r.agg <- ifel(result.r.agg >= 0.5, 1, result.r.agg)
-        result.r.agg <- ifel(result.r.agg < 0.5, 0, result.r.agg)
-        
-        ref.neg <- cells(ref.dist.r.agg, c(0))[[1]] # cell.IDs of reference absences
-        ref.pos <- cells(ref.dist.r.agg, c(1))[[1]] # cell.IDs of reference presences
-        pred.neg <- cells(result.r.agg, c(0))[[1]] # cell.IDs of predicted absences
-        pred.pos <- cells(result.r.agg, c(1))[[1]] # cell.IDs of predicted presences
-        
-        TP <- sum(pred.pos %in% ref.pos) # uses cell.IDs to check which are correct/false
-        TN <- sum(pred.neg %in% ref.neg) # uses cell.IDs to check which are correct/false
-        FP <- sum(pred.pos %in% ref.neg) # uses cell.IDs to check which are correct/false
-        FN <- sum(pred.neg %in% ref.pos) # uses cell.IDs to check which are correct/false
-        
-        accuracy <- 1 - (TP + TN) / (TP + FP + FN + TN) # is inverted because the optim algorithm needed it this way.
-      }
-    #
-    #
-    #
-    
     
     gc()
     print(paste("time.step", t.s, "out of", time.steps, "done"))
@@ -411,7 +323,7 @@ pot.countries <- c(
 # "Azerbaijan" left out because no data available, majority in Europe
 
 # filter with GADM instead of years => most records are from after 2010, even in the native region so I try here with regional separation, not temporal
-gadm.0 <- st_read("simulation input data/world_gadm_410-levels.gpkg", layer = "ADM_0")
+gadm.0 <- sf::st_read("simulation input data/world_gadm_410-levels.gpkg", layer = "ADM_0")
 gadm.0.native <- gadm.0 %>%
   dplyr::filter(COUNTRY %in% native)
 gadm.0.n.native <- gadm.0 %>%
@@ -446,8 +358,8 @@ gadm.2.pot <- gadm.2 %>%
 
 ### occurrence data from Seifert -----------------------------------------------
 # transform excel data into a shapefile.
-tapintro <- readxl::read_excel("simulation input data/tapinoma/TAPINTRO.xlsx")
-tapinoc <- readxl::read_excel("simulation input data/tapinoma/TAPINO_C.xlsx") %>%
+tapintro <- readxl::read_excel("simulation input data/tapinoma/TAPINTRO [Seifert].xlsx")
+tapinoc <- readxl::read_excel("simulation input data/tapinoma/TAPINO_C [Seifert].xlsx") %>%
   dplyr::filter(HYP == "magn")
 
 tap <- bind_rows(tapinoc, tapintro)
@@ -488,7 +400,7 @@ tap.mag.n.native <- comp %>% # create a subset of occurrence non.native records.
 # LC = copernicus land-cover classes
 # pop.density = population density raster (copernicus GHS)
 gbm.r <- rast(
-  "simulation input data/tapinoma/biomod2_GBM.bio01.bio10.bio11.bio13.bio14.LC.pop.density.tif"
+  "simulation input data/tapinoma/biomod2_GBM.bio10.bio13.bio14.LC.pop.density.tif"
 )
 names(gbm.r) <- "layer"
 gbm.r <- crop(gbm.r, e)
@@ -607,16 +519,12 @@ add.nodes <- add.nodes %>%
 ini.nodes <- unique(c(ini.nodes$ID, add.nodes$ID))
 
 agg.acc.fact <-  10 # how much should the result and reference raster be aggregated to calculate the accuracy?
-acc.vect <- st_union(st_buffer(tap.mag.n.native[, 1], 120000)) #acc.vect = accuracy vector, inside this area, accuracy is calculated.
+acc.vect <- st_union(st_buffer(tap.mag.n.native[, 1], 50000)) #acc.vect = accuracy vector, in meter, inside this area, accuracy is calculated.
 ext(ref.dist.r) == ext(empty.r) # check if data match.
-ref.dist.r.agg <- aggregate(ref.dist.r, agg.acc.fact, fun = "mean", na.rm = TRUE) %>% # aggregate the reference raster to avoid being overly fine-scaled
-  terra::mask(vect(acc.vect))
-ref.dist.r.agg <- ifel(ref.dist.r.agg >= 0.5, 1, ref.dist.r.agg) # make binary (fun = "mean" in aggregate makes non-binary values)
-ref.dist.r.agg <- ifel(ref.dist.r.agg < 0.5, 0, ref.dist.r.agg) # make binary (fun = "mean" in aggregate makes non-binary values)
 
 spread.val <- 1 # budget for spread used in gridprocess::rawspread()
-thresh.disp.factor <- 0.9 # threshold which has to be reached in a cell to be treated as occupied/presence
-time.steps <- 2 # how many consecutive iterations?
+thresh.disp.factor <- 0.8 # threshold which has to be reached in a cell to be treated as occupied/presence
+time.steps <- 10 # how many consecutive iterations?
 min.tr <- quantile(eu.links$predicted, probs = c(0.95), na.rm = TRUE)[[1]] # probs defines which quantile of the traffic volumes is used as minimum traffic value that filter or paths which are used in the traffic network.
 max.dist <- 350000 # paths in the network longer than this will not be used, in meter.
 #
@@ -631,7 +539,6 @@ out <- dispersal(
   land.spread = TRUE,
   net.spread = TRUE,
   spread.val = spread.val,
-  nodes.cut.off = nodes.cut.off,
   thresh.disp.factor = thresh.disp.factor,
   time.steps = time.steps,
   dist.ini = tap.mag.ini,
@@ -639,12 +546,8 @@ out <- dispersal(
   ref.raster = empty.r,
   result.r = empty.r,
   ref.dist.r = ref.dist.r,
-  dist.red = FALSE,
-  dist.red.param = 2,
   plot.result = TRUE,
   sample.nodes.from.raster = TRUE,
-  regional.approach = FALSE,
-  regional.approach.acc = FALSE,
   unsuitability.mask = mask,
   acc.vect = acc.vect,
   min.tr = min.tr,
@@ -671,7 +574,6 @@ plot(out[[1]],
        "init: 1;",
        "\nmin.tr:", round(min.tr,2), "; ",
        "max.dist:", max.dist/1000, "km; ",
-       #"\nn.c.o =", nodes.cut.off, ";",
        "t.s:", time.steps, ";",
        "\nt.d.f:", thresh.disp.factor, "; ",
        "transformation ²"), 
@@ -680,7 +582,6 @@ plot(out[[1]],
      main = paste(
        "s.v =", spread.val, ";",
        "init = 1;",
-       #"\nn.c.o =", nodes.cut.off, ";",
        "t.s =", time.steps, ";",
        "\nt.d.f =", thresh.disp.factor, ";",
        "ini.points = green ;",
@@ -709,7 +610,7 @@ plot(out[[4]][[1:2]])
 ## data preparation ------------------------------------------------------------
 ### geographic reference -------------------------------------------------------
 ref.raster <- rast("simulation input data/senecio/dgm1000_utm32s.asc") # 1km² Digitales Geländemodell from https://gdz.bkg.bund.de/index.php/default/digitales-gelandemodell-gitterweite-1000-m-dgm1000.html ; 16.05.2025
-ref.raster <- rast("simulation input data/senecio/biomod2_GBM.first.try.tif") %>%
+ref.raster <- rast("simulation input data/senecio/biomod2_GBM.2PA.average.bio1.bio12.nitrogen.traffic.LC.tif") %>%
   terra::aggregate(5)
 names(ref.raster) <- "layer"
 #terra::crs(ref.raster) <- "+proj=utm +zone=32 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs" # assign crs
@@ -758,7 +659,7 @@ ref.p <- sen.spread %>%
 #
 
 ### read SDM map & make resistance raster for gridprocess::rawpsread() ---------
-gbm.r <- rast("simulation input data/senecio/biomod2_GBM.first.try.tif") %>%  # biomod SDM output from boosted regression trees (gbm)
+gbm.r <- rast("simulation input data/senecio/biomod2_GBM.2PA.average.bio1.bio12.nitrogen.traffic.LC.tif") %>%  # biomod SDM output from boosted regression trees (gbm)
   project(ref.raster)
 names(gbm.r) <- "layer"
 gbm.r <- 1 / max(values(gbm.r), na.rm = TRUE) * gbm.r # with this step it is set to a scale of 0 to 1 irrespective of the transformation
@@ -771,7 +672,7 @@ mask <- which.lyr(gbm.r[[1]] <= mask.thresh) %>%  # gets a spatraster that has o
   cells()                               # gets the cell numbers; these are then set to 0 (i.e. unoccupied in the result.r in the dispersal() function)
 
 gbm.r[gbm.r < mask.thresh] <- 0
-gbm.r <- gbm.r ^ 5 # exponential conversion instead of linear.
+gbm.r <- gbm.r ^ 2 # exponential conversion instead of linear.
 gbm.r <- 1 / max(values(gbm.r), na.rm = TRUE) * gbm.r # with this step it is set to a scale of 0 to 1 irrespective of the transformation
 gbm.r[mask] <- 0
 
@@ -843,7 +744,7 @@ nodes <- nodes[lengths(st_intersects(nodes, ger)) > 0, ]# crop the nodes to the 
 #
 #
 #
-### define input ---------------------------------------------------------------
+## define input ---------------------------------------------------------------
 empty.r <- ref.raster
 empty.r[!is.na(empty.r)] <- 0 # create empty raster with no connections or anything
 
@@ -861,25 +762,20 @@ ini.nodes <- ini.nodes$ID
 #
 
 spread.val <- 1
-nodes.cut.off <- 0.03
 thresh.disp.factor <- 0.75
-time.steps <- 4
+time.steps <- 3
 agg.acc.fact <- 1
 acc.vect <- ger
 min.tr <- 0
-max.dist <- 1000000
+max.dist <- 500000
 
 ext(ref.dist.r) == ext(empty.r)
-ref.dist.r.agg <- aggregate(ref.dist.r, agg.acc.fact, fun = "mean", na.rm = TRUE) %>%
-  terra::mask(vect(acc.vect))
-ref.dist.r.agg <- ifel(ref.dist.r.agg >= 0.5, 1, ref.dist.r.agg)
-ref.dist.r.agg <- ifel(ref.dist.r.agg < 0.5, 0, ref.dist.r.agg)
 
+## run function ----------------------------------------------------------------
 out <- dispersal(
   land.spread = TRUE,
   net.spread = TRUE,
   spread.val = spread.val,
-  nodes.cut.off = nodes.cut.off,
   thresh.disp.factor = thresh.disp.factor, 
   time.steps = time.steps,
   dist.ini = sen.ini,
@@ -887,12 +783,8 @@ out <- dispersal(
   ref.raster = ref.raster,
   result.r = empty.r,
   ref.dist.r = ref.dist.r,
-  dist.red = FALSE,
-  dist.red.param = 2,
   plot.result = TRUE, 
   sample.nodes.from.raster = TRUE,
-  regional.approach = FALSE, 
-  regional.approach.acc = FALSE,
   unsuitability.mask = mask,
   acc.vect = acc.vect,
   min.tr = min.tr,
@@ -906,7 +798,6 @@ plot(ini.dist.r,
 plot(mask(out[[1]],vect(ger)), 
      main = paste(
        "s.v =", spread.val, ";",
-       "\nn.c.o =", nodes.cut.off, ";",
        "t.s =", time.steps, ";",
        "\nt.d.f =", thresh.disp.factor, ";",
        "transformation ^5"), 
@@ -914,7 +805,6 @@ plot(mask(out[[1]],vect(ger)),
 plot(mask(out[[1]],vect(ger)), 
      main = paste(
        "s.v =", spread.val, ";",
-       "\nn.c.o =", nodes.cut.off, ";",
        "t.s =", time.steps, ";",
        "\nt.d.f =", thresh.disp.factor, ";",
        "ini.points = green ;",
@@ -994,7 +884,7 @@ non.native <- c(
   "Andorra"
 ) 
 
-gadm.0 <- st_read("simulation input data/world_gadm_410-levels.gpkg", layer = "ADM_0") %>%
+gadm.0 <- st_read("PredictiveAliens-Model/simulation input data/world_gadm_410-levels.gpkg", layer = "ADM_0") %>%
   st_make_valid()
 
 gadm.0 <- gadm.0 %>%
@@ -1005,7 +895,7 @@ gadm.0.n.native <- gadm.0 %>%
   dplyr::filter(COUNTRY %in% non.native)
 
 sf_use_s2(FALSE)
-gadm.2 <- st_read("simulation input data/world_gadm_410-levels.gpkg", layer = "ADM_2") %>%
+gadm.2 <- st_read("PredictiveAliens-Model/simulation input data/world_gadm_410-levels.gpkg", layer = "ADM_2") %>%
   dplyr::filter(COUNTRY %in% c(native, non.native)) %>%
   st_make_valid() %>%
   st_buffer(0)
@@ -1016,12 +906,12 @@ gadm.2.native <- gadm.2 %>%
 gadm.2.n.native <- gadm.2 %>%
   dplyr::filter(COUNTRY %in% non.native)
 
-waterways.add <- rast("simulation input data/myocastor/waterways.raster.tiff")
+waterways.add <- rast("PredictiveAliens-Model/simulation input data/myocastor/waterways.raster.tiff")
 gbm.r <- rast(
-  "simulation input data/myocastor/biomod2_GBM.update.bio02.bio6.bio10.bio15.bio17.LC.pop.gbif and anna.tif"
+  "PredictiveAliens-Model/simulation input data/myocastor/biomod2_GBM.update.bio02.bio6.bio10.bio15.LC.pop.gbif and anna.tif"
 )
 ### occurrence data (anna & gbif) ----------------------------------------------
-myo.coy <- read.csv("simulation input data/myocastor/M coypus gbif 13082025.csv",
+myo.coy <- read.csv("PredictiveAliens-Model/simulation input data/myocastor/M coypus gbif 13082025.csv",
                     sep = "\t")
 myo.coy <- tibble(myocastor = 1,
                   longitude = myo.coy$decimalLongitude,
@@ -1030,7 +920,7 @@ myo.coy <- tibble(myocastor = 1,
 ) %>%
   na.omit()
 
-a.s.rec <- st_read("simulation input data/myocastor/nutria_occurrence_records_1980_2018 anna schertler.gpkg")###
+a.s.rec <- st_read("PredictiveAliens-Model/simulation input data/myocastor/nutria_occurrence_records_1980_2018 anna schertler.gpkg")###
 points <- st_centroid(a.s.rec) %>% 
   st_transform("epsg:4326")
 
@@ -1141,7 +1031,7 @@ plot(myo.coy.xy[, 1],
 #
 #
 ### read in traffic network ----------------------------------------------------
-eu.links <- st_read("simulation input data/1031.1165ua.GHS.800km.gpkg", # this is a shapefile with all least-cost paths (i.e. open street map routes) between all pairs of urban areas
+eu.links <- st_read("PredictiveAliens-Model/simulation input data/1031.1165ua.GHS.800km.gpkg", # this is a shapefile with all least-cost paths (i.e. open street map routes) between all pairs of urban areas
                     layer = "1031.1165ua.GHS.800km.exp.predict")
 eu.links$length <- eu.links$original.dist
 eu.links$link.id <- 1:nrow(eu.links) # paths need an ID for easier use later
@@ -1164,7 +1054,7 @@ eu.links <- st_drop_geometry(eu.links) # geometries not needed for use in the di
 #
 #
 ### read in urban areas --------------------------------------------------------
-nodes <- st_read("simulation input data/eur.urban.areas.gpkg", 
+nodes <- st_read("PredictiveAliens-Model/simulation input data/eur.urban.areas.gpkg", 
                  layer = "GHS.29.10.2025.points")
 nodes <- nodes[lengths(st_intersects(nodes, gadm.0)) > 0, ] # crop the nodes to the area of interest to reduce computing time and avoid errors when they lead out of the cropped rasters
 # no need to use gadm.2, all are here
@@ -1199,46 +1089,40 @@ ini.nodes <- ini.nodes$ID
 #
 
 ### run function ---------------------------------------------------------------
-agg.acc.fact <-  10
-acc.vect <- gadm.0
+
 ext(ref.dist.r) == ext(empty.r)
-ref.dist.r.agg <- aggregate(ref.dist.r, agg.acc.fact, fun = "mean", na.rm = TRUE) %>%
-  terra::mask(vect(acc.vect))
-ref.dist.r.agg <- ifel(ref.dist.r.agg >= 0.5, 1, ref.dist.r.agg)
-ref.dist.r.agg <- ifel(ref.dist.r.agg < 0.5, 0, ref.dist.r.agg)
 
 ini.nodes <-  ini.nodes
 spread.val <- 1
 nodes.cut.off <- 0.1
 time.steps <- 4
 thresh.disp.factor <- 0.25
+agg.acc.fact <-  10
+acc.vect <- gadm.0
 min.tr <- quantile(eu.links$predicted, probs = c(0.50), na.rm = TRUE)[[1]] # probs defines which quantile of the traffic volumes is used as minimum traffic value that filter or paths which are used in the traffic network.
 max.dist <- 350000 # paths in the network longer than this will not be used, in meter.
 
 out <- dispersal(
   land.spread = TRUE,
-  net.spread = TRUE,
+  net.spread = FALSE,
   spread.val = spread.val,
-  nodes.cut.off = nodes.cut.off,
   thresh.disp.factor = thresh.disp.factor, 
   time.steps = time.steps,
   dist.ini = myo.coy.xy.ini,
   ini.nodes = ini.nodes,
   ref.raster = empty.r,
   result.r = empty.r,
-  dist.red = FALSE,
   ref.dist.r = ref.dist.r,
-  dist.red.param = 2,
   plot.result = TRUE, 
   sample.nodes.from.raster = TRUE,
-  regional.approach = FALSE, 
-  regional.approach.acc = FALSE,
   unsuitability.mask = mask,
   acc.vect = acc.vect,
   agg.acc.fact = agg.acc.fact,
   min.tr = min.tr,
   max.dist = max.dist
 )
+
+
 
 par(mfrow = c(2,2))
 plot(mask(ini.dist.r, vect(gadm.0)), 
@@ -1247,7 +1131,6 @@ plot(mask(ini.dist.r, vect(gadm.0)),
 plot(mask(out[[1]],vect(gadm.0)), 
      main = paste(
        "s.v =", spread.val, ";",
-       "\nn.c.o =", nodes.cut.off, ";",
        "t.s =", time.steps, ";",
        "\nt.d.f =", thresh.disp.factor, ";",
        "transformation ²"), 
@@ -1255,7 +1138,6 @@ plot(mask(out[[1]],vect(gadm.0)),
 plot(mask(out[[1]],vect(gadm.0)), 
      main = paste(
        "s.v =", spread.val, ";",
-       "\nn.c.o =", nodes.cut.off, ";",
        "t.s =", time.steps, ";",
        "\nt.d.f =", thresh.disp.factor, ";",
        "ini.points = green ;",
