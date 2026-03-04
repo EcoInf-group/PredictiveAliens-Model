@@ -1164,20 +1164,22 @@ plot(mask(out[[4]][[4]],vect(gadm.0)),
 #
 #
 #
-# example for optimization-by-hand approach ------------------------------------
+#
+# ADDITIONAL STEPS -------------------------------------------------------------
+#
+#
+#
+## example for optimization-by-hand approach -----------------------------------
 accuracy.list <- tibble(accuracy = numeric(), 
                         spread.val = numeric(),
                         thresh.disp.factor = numeric(),
-                        time.step = integer(),
-                        initiation = numeric(), 
-                        agg.acc.fact = numeric(), 
                         min.tr = numeric(), 
                         max.dist = numeric())
 
 parameters <- tidyr::crossing(
   spread.val = c(0.9, 1, 1.5, 2),
   thresh.disp.factor = c(0.3, 0.6, 0.9),
-  min.tr.quantile = c(0.1, 0.5, 0.9),
+  min.tr = c(0.1, 0.5, 0.9),
   max.dist = c(100000, 350000, 500000)
 )
 
@@ -1187,7 +1189,7 @@ for(i.p in 1:nrow(parameters)){
   spread.val <- parameters[i.p,]$spread.val
   thresh.disp.factor <- parameters[i.p,]$thresh.disp.factor
   time.steps <- 27
-  min.tr <- quantile(eu.links$predicted, probs = c(parameters[i.p,]$min.tr.quantile), na.rm = TRUE)[[1]]
+  min.tr <- quantile(eu.links$predicted, probs = c(parameters[i.p,]$min.tr), na.rm = TRUE)[[1]]
   #min.tr <- 0.5 # derived from the reference distribution (see below)
   max.dist <- parameters[i.p,]$max.dist
   
@@ -1195,20 +1197,15 @@ for(i.p in 1:nrow(parameters)){
     land.spread = TRUE,
     net.spread = TRUE,
     spread.val = spread.val,
-    nodes.cut.off = nodes.cut.off,
     thresh.disp.factor = thresh.disp.factor, 
     time.steps = time.steps,
-    dist.ini = tap.mag.ini,
+    dist.ini = sen.ini,
     ini.nodes = ini.nodes,
-    ref.raster = empty.r,
+    ref.raster = ref.raster,
     result.r = empty.r,
     ref.dist.r = ref.dist.r,
-    dist.red = FALSE,
-    dist.red.param = 2,
     plot.result = TRUE, 
     sample.nodes.from.raster = TRUE,
-    regional.approach = FALSE,
-    regional.approach.acc = FALSE,
     unsuitability.mask = mask,
     acc.vect = acc.vect,
     min.tr = min.tr,
@@ -1235,7 +1232,7 @@ save <- optim.output
 #
 #
 #
-# better plots with tmap -------------------------------------------------------
+## better plots with tmap ------------------------------------------------------
 library(tmap)
 out.pol <- as.polygons(out[[4]][[23]]) %>%
   st_as_sf()
