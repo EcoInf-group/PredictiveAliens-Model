@@ -265,6 +265,238 @@ dispersal <- function(land.spread = TRUE, # logical, is spread through the lands
   }
 }
 
+
+#
+#
+#
+#
+#
+# Senecio inaequidens ----------------------------------------------------------
+# define inputs needed for function:
+## data preparation ------------------------------------------------------------
+### geographic reference -------------------------------------------------------
+#ref.raster <- rast("simulation input data/senecio/dgm1000_utm32s.asc") # 1km² Digitales Geländemodell from https://gdz.bkg.bund.de/index.php/default/digitales-gelandemodell-gitterweite-1000-m-dgm1000.html ; 16.05.2025
+ref.raster <- rast("data/simulation input data/senecio inaequidens/biomod2_GBM.2PA.average.bio1.bio12.nitrogen.traffic.LC.tif") %>%
+  terra::aggregate(5)
+names(ref.raster) <- "layer"
+#terra::crs(ref.raster) <- "+proj=utm +zone=32 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs" # assign crs
+#ref.raster <- terra::aggregate(ref.raster, 5) # do with all rasters that are used!
+
+ger <- st_read("data/environmental data/gadm41_DEU.gpkg", # to crop to germany
+               layer = "ADM_ADM_0") %>%
+  st_transform(st_crs(ref.raster))
+
+
+### occurrence data (CASPIAN & gbif) -------------------------------------------
+sen.spread <- data.table::fread("data/species occurrence data/senecio inaequidens/SenecioSpread_HegerBoehmerCaspianSuppl.csv") # data from Hanno for the Caspian suppl map
+sen.spread <- sen.spread[, -c(2, 3)]
+sen.gbif <- read.csv("data/species occurrence data/senecio inaequidens/gbif.22.01.2026.csv", sep = "\t")
+sen.gbif <- tibble(
+  Long = sen.gbif$decimalLongitude,
+  Lat = sen.gbif$decimalLatitude,
+  year = sen.gbif$year
+) %>%
+  na.omit()
+sen.spread <- bind_rows(sen.spread, sen.gbif)
+
+sen.spread <- st_as_sf(sen.spread, coords = c("Long", "Lat"), crs = 4326) %>%
+  st_transform(st_crs(ref.raster))
+sen.spread <- st_intersection(sen.spread, ger$geom) 
+
+
+sen.spread$decade <- sen.spread$year
+# convert to decades instead of years:
+sen.spread$decade[sen.spread$decade < 1979] <- 1979
+sen.spread$decade[between(sen.spread$decade, 1980, 1989)] <- 1989
+sen.spread$decade[between(sen.spread$decade, 1990, 1999)] <- 1999
+sen.spread$decade[between(sen.spread$decade, 2000, 2009)] <- 2009
+sen.spread$decade[between(sen.spread$decade, 2010, 2019)] <- 2019
+sen.spread$decade[between(sen.spread$decade, 2020, 2025)] <- 2025
+
+sen.ini <- sen.spread %>% # filter based on record day which occurrence records are used as initial distribution (i.e. starting points) in the simulation
+  dplyr::filter(year <= 1979)
+
+# final reference distribution:
+# here try with regions invaded by 2004/2009 (i.e. time.step = 4)
+ref.p <- sen.spread %>%
+  dplyr::filter(year <= 2009)
+#
+#
+#
+#
+#
+
+### read SDM map & make resistance raster for gridprocess::rawpsread() ---------
+gbm.r <- rast("data/simulation input data/senecio inaequidens/biomod2_GBM.2PA.average.bio1.bio12.nitrogen.traffic.LC.tif") %>%  # biomod SDM output from boosted regression trees (gbm)
+  project(ref.raster)
+names(gbm.r) <- "layer"
+gbm.r <- 1 / max(values(gbm.r), na.rm = TRUE) * gbm.r # with this step it is set to a scale of 0 to 1 irrespective of the transformation
+gbm.r <- terra::mask(gbm.r, vect(ger))
+gbm.r <- subst(gbm.r, NA, 0)
+
+mask.thresh <- 0.4
+mask <- which.lyr(gbm.r[[1]] <= mask.thresh) %>%  # gets a spatraster that has only cells which are 0 in gbm.r (i.e. which are unsuitable)
+  #terra::mask(vect(ger)) %>%           # crops it to the area of interest -> CHECK IF NECESSARY # deleted because if I do this, then the grid allows to cross borders over time
+  cells()                               # gets the cell numbers; these are then set to 0 (i.e. unoccupied in the result.r in the dispersal() function)
+
+gbm.r[gbm.r < mask.thresh] <- 0
+gbm.r <- gbm.r ^ 2 # exponential conversion instead of linear.
+gbm.r <- 1 / max(values(gbm.r), na.rm = TRUE) * gbm.r # with this step it is set to a scale of 0 to 1 irrespective of the transformation
+gbm.r[mask] <- 0
+
+gbm.r.inv <- gbm.r * -1 + max(values(gbm.r[[1]]), na.rm = TRUE) # invert raster for creation of resistance matrix
+
+limit <- max(values(gbm.r.inv), na.rm = TRUE)
+#spread.limit <- limit*100 # set value for areas which are not crossable
+gbm.r.inv <- subst(gbm.r.inv, # must not have NAs for the function below, so replace with spread.limit to make these areas not crossable
+                   1, 9999) # the final
+# plot(gbm.r.inv) # no network visible in plot anymore if limit much higher than maximum value in network becaus of color-scale. reduce spread.limit to make it visible again.
+gbm.r.inv <- asgrid(
+  gbm.r.inv,
+  # convert to grid for spread function
+  xll = xmin(gbm.r.inv),
+  yll = ymin(gbm.r.inv),
+  cellsize = 1000
+) # update cellsize with the aggregate factor * 1000m
+#
+#
+#
+#
+#
+
+
+#
+#
+#
+### plot to check if all data align and see what they look like. ---------------
+plot(gbm.r)
+plot(ref.p[, 1],
+     add = TRUE ,
+     col = "yellow",
+     pch = 19)
+plot(sen.ini[, 1],
+     add = TRUE,
+     col = "red",
+     pch = 19)
+#
+#
+#
+
+
+### read in traffic network ----------------------------------------------------
+eu.links <- st_read("data/traffic data/1031.1165ua.GHS.800km.gpkg", # this is a shapefile with all least-cost paths (i.e. open street map routes) between all pairs of urban areas
+                    layer = "1031.1165ua.GHS.800km.exp.predict")
+eu.links$length <- eu.links$original.dist
+eu.links$link.id <- 1:nrow(eu.links) # paths need an ID for easier use later
+eu.links <- eu.links %>%
+  rename(o.ID = start.ID)
+eu.links <- eu.links %>%
+  rename(d.ID = dest.ID)
+
+# crop the eu.links to the area of interest to reduce computing time and avoid errors when they lead out of the cropped rasters:
+eu.links <- eu.links[lengths(st_intersects(eu.links, ger)) > 0, ]
+eu.links.geom <- eu.links # to save it with geometries for later plotting
+eu.links <- st_drop_geometry(eu.links) # geometries not needed for use in the dispersal() function.
+
+#
+#
+#
+### read in urban areas --------------------------------------------------------
+nodes <- st_read("data/environmental data/eur.urban.areas.gpkg", layer = "GHS.29.10.2025.points")
+nodes <- nodes[lengths(st_intersects(nodes, ger)) > 0, ]# crop the nodes to the area of interest to reduce computing time and avoid errors when they lead out of the cropped rasters
+#
+#
+#
+
+
+#
+#
+#
+## define input ---------------------------------------------------------------
+empty.r <- ref.raster
+empty.r[!is.na(empty.r)] <- 0 # create empty raster with no connections or anything
+
+ini.dist.r <- empty.r %>%
+  terra::mask(vect(st_buffer(sen.ini, 5000)), updatevalue = 1, inverse = TRUE)
+
+ref.dist.r <- ini.dist.r %>% # used as reference to calculate the accuracy of the dispersal()-output.
+  terra::mask(vect(st_buffer(ref.p, 5000)), updatevalue = 1, inverse = TRUE)
+
+nodes$occ <- terra::extract(ini.dist.r, vect(nodes))[, 2]
+ini.nodes <- nodes %>% dplyr::filter(occ == 1)
+ini.nodes <- ini.nodes$ID
+#
+#
+#
+
+spread.val <- 1
+thresh.disp.factor <- 0.75
+time.steps <- 3
+agg.acc.fact <- 1
+acc.vect <- ger
+min.tr <- 0
+max.dist <- 500000
+
+ext(ref.dist.r) == ext(empty.r)
+
+## run function ----------------------------------------------------------------
+out <- dispersal(
+  land.spread = TRUE,
+  net.spread = TRUE,
+  spread.val = spread.val,
+  thresh.disp.factor = thresh.disp.factor, 
+  time.steps = time.steps,
+  dist.ini = sen.ini,
+  ini.nodes = ini.nodes,
+  ref.raster = ref.raster,
+  result.r = empty.r,
+  ref.dist.r = ref.dist.r,
+  plot.result = TRUE, 
+  sample.nodes.from.raster = TRUE,
+  unsuitability.mask = mask,
+  acc.vect = acc.vect,
+  min.tr = min.tr,
+  max.dist = max.dist
+)
+
+par(mfrow = c(2,2))
+plot(ini.dist.r, 
+     main = "initial distribution", 
+     background = "darkgrey")
+plot(mask(out[[1]],vect(ger)), 
+     main = paste(
+       "s.v =", spread.val, ";",
+       "t.s =", time.steps, ";",
+       "\nt.d.f =", thresh.disp.factor, ";",
+       "transformation ^5"), 
+     background = "darkgrey")
+plot(mask(out[[1]],vect(ger)), 
+     main = paste(
+       "s.v =", spread.val, ";",
+       "t.s =", time.steps, ";",
+       "\nt.d.f =", thresh.disp.factor, ";",
+       "ini.points = green ;",
+       "\nreached ua (sim.) = red"), 
+     background = "darkgrey")
+plot(sen.ini, add = TRUE, col = "darkgreen", pch = 19) # starting points
+plot(dplyr::filter(nodes, ID %in% out[[2]])[,1], add = TRUE, col = "red", pch = 19) # reached ua
+plot(ref.dist.r, 
+     main = "final reference distribution", 
+     background = "darkgrey")
+out[[3]]
+out[[4]] <- mask(out[[4]], vect(ger))
+plot(out[[4]])
+
+###
+# end senecio
+###
+###
+###
+###
+###
+
+
+
 # Tapinoma magnum with Seiferts data -------------------------------------------
 ## data preparation ------------------------------------------------------------
 # area of interest (the smaller the faster):
@@ -600,234 +832,6 @@ plot(out[[4]][[1:2]])
 #
 #
 #
-
-
-#
-#
-#
-#
-#
-# Senecio inaequidens ----------------------------------------------------------
-# define inputs needed for function:
-## data preparation ------------------------------------------------------------
-### geographic reference -------------------------------------------------------
-#ref.raster <- rast("simulation input data/senecio/dgm1000_utm32s.asc") # 1km² Digitales Geländemodell from https://gdz.bkg.bund.de/index.php/default/digitales-gelandemodell-gitterweite-1000-m-dgm1000.html ; 16.05.2025
-ref.raster <- rast("data/simulation input data/senecio inaequidens/biomod2_GBM.2PA.average.bio1.bio12.nitrogen.traffic.LC.tif") %>%
-  terra::aggregate(5)
-names(ref.raster) <- "layer"
-#terra::crs(ref.raster) <- "+proj=utm +zone=32 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs" # assign crs
-#ref.raster <- terra::aggregate(ref.raster, 5) # do with all rasters that are used!
-
-ger <- st_read("data/environmental data/gadm41_DEU.gpkg", # to crop to germany
-               layer = "ADM_ADM_0") %>%
-  st_transform(st_crs(ref.raster))
-
-
-### occurrence data (CASPIAN & gbif) -------------------------------------------
-sen.spread <- data.table::fread("data/species occurrence data/senecio inaequidens/SenecioSpread_HegerBoehmerCaspianSuppl.csv") # data from Hanno for the Caspian suppl map
-sen.spread <- sen.spread[, -c(2, 3)]
-sen.gbif <- read.csv("data/species occurrence data/senecio inaequidens/gbif.22.01.2026.csv", sep = "\t")
-sen.gbif <- tibble(
-  Long = sen.gbif$decimalLongitude,
-  Lat = sen.gbif$decimalLatitude,
-  year = sen.gbif$year
-) %>%
-  na.omit()
-sen.spread <- bind_rows(sen.spread, sen.gbif)
-
-sen.spread <- st_as_sf(sen.spread, coords = c("Long", "Lat"), crs = 4326) %>%
-  st_transform(st_crs(ref.raster))
-
-sen.spread$decade <- sen.spread$year
-# convert to decades instead of years:
-sen.spread$decade[sen.spread$decade < 1979] <- 1979
-sen.spread$decade[between(sen.spread$decade, 1980, 1989)] <- 1989
-sen.spread$decade[between(sen.spread$decade, 1990, 1999)] <- 1999
-sen.spread$decade[between(sen.spread$decade, 2000, 2009)] <- 2009
-sen.spread$decade[between(sen.spread$decade, 2010, 2019)] <- 2019
-sen.spread$decade[between(sen.spread$decade, 2020, 2025)] <- 2025
-
-sen.ini <- sen.spread %>% # filter based on record day which occurrence records are used as initial distribution (i.e. starting points) in the simulation
-  dplyr::filter(year <= 1979)
-
-# final reference distribution:
-# here try with regions invaded by 2004/2009 (i.e. time.step = 4)
-ref.p <- sen.spread %>%
-  dplyr::filter(year <= 2009)
-#
-#
-#
-#
-#
-
-### read SDM map & make resistance raster for gridprocess::rawpsread() ---------
-gbm.r <- rast("data/simulation input data/senecio inaequidens/biomod2_GBM.2PA.average.bio1.bio12.nitrogen.traffic.LC.tif") %>%  # biomod SDM output from boosted regression trees (gbm)
-  project(ref.raster)
-names(gbm.r) <- "layer"
-gbm.r <- 1 / max(values(gbm.r), na.rm = TRUE) * gbm.r # with this step it is set to a scale of 0 to 1 irrespective of the transformation
-gbm.r <- terra::mask(gbm.r, vect(ger))
-gbm.r <- subst(gbm.r, NA, 0)
-
-mask.thresh <- 0.4
-mask <- which.lyr(gbm.r[[1]] <= mask.thresh) %>%  # gets a spatraster that has only cells which are 0 in gbm.r (i.e. which are unsuitable)
-  #terra::mask(vect(ger)) %>%           # crops it to the area of interest -> CHECK IF NECESSARY # deleted because if I do this, then the grid allows to cross borders over time
-  cells()                               # gets the cell numbers; these are then set to 0 (i.e. unoccupied in the result.r in the dispersal() function)
-
-gbm.r[gbm.r < mask.thresh] <- 0
-gbm.r <- gbm.r ^ 2 # exponential conversion instead of linear.
-gbm.r <- 1 / max(values(gbm.r), na.rm = TRUE) * gbm.r # with this step it is set to a scale of 0 to 1 irrespective of the transformation
-gbm.r[mask] <- 0
-
-gbm.r.inv <- gbm.r * -1 + max(values(gbm.r[[1]]), na.rm = TRUE) # invert raster for creation of resistance matrix
-
-limit <- max(values(gbm.r.inv), na.rm = TRUE)
-#spread.limit <- limit*100 # set value for areas which are not crossable
-gbm.r.inv <- subst(gbm.r.inv, # must not have NAs for the function below, so replace with spread.limit to make these areas not crossable
-                   1, 9999) # the final
-# plot(gbm.r.inv) # no network visible in plot anymore if limit much higher than maximum value in network becaus of color-scale. reduce spread.limit to make it visible again.
-gbm.r.inv <- asgrid(
-  gbm.r.inv,
-  # convert to grid for spread function
-  xll = xmin(gbm.r.inv),
-  yll = ymin(gbm.r.inv),
-  cellsize = 1000
-) # update cellsize with the aggregate factor * 1000m
-#
-#
-#
-#
-#
-
-
-#
-#
-#
-### plot to check if all data align and see what they look like. ---------------
-plot(gbm.r)
-plot(ref.p[, 1],
-     add = TRUE ,
-     col = "yellow",
-     pch = 19)
-plot(sen.ini[, 1],
-     add = TRUE,
-     col = "red",
-     pch = 19)
-#
-#
-#
-
-
-### read in traffic network ----------------------------------------------------
-eu.links <- st_read("data/traffic data/1031.1165ua.GHS.800km.gpkg", # this is a shapefile with all least-cost paths (i.e. open street map routes) between all pairs of urban areas
-                    layer = "1031.1165ua.GHS.800km.exp.predict")
-eu.links$length <- eu.links$original.dist
-eu.links$link.id <- 1:nrow(eu.links) # paths need an ID for easier use later
-eu.links <- eu.links %>%
-  rename(o.ID = start.ID)
-eu.links <- eu.links %>%
-  rename(d.ID = dest.ID)
-
-# crop the eu.links to the area of interest to reduce computing time and avoid errors when they lead out of the cropped rasters:
-eu.links <- eu.links[lengths(st_intersects(eu.links, ger)) > 0, ]
-eu.links.geom <- eu.links # to save it with geometries for later plotting
-eu.links <- st_drop_geometry(eu.links) # geometries not needed for use in the dispersal() function.
-
-#
-#
-#
-### read in urban areas --------------------------------------------------------
-nodes <- st_read("data/environmental data/eur.urban.areas.gpkg", layer = "GHS.29.10.2025.points")
-nodes <- nodes[lengths(st_intersects(nodes, ger)) > 0, ]# crop the nodes to the area of interest to reduce computing time and avoid errors when they lead out of the cropped rasters
-#
-#
-#
-
-
-#
-#
-#
-## define input ---------------------------------------------------------------
-empty.r <- ref.raster
-empty.r[!is.na(empty.r)] <- 0 # create empty raster with no connections or anything
-
-ini.dist.r <- empty.r %>%
-  terra::mask(vect(st_buffer(sen.ini, 5000)), updatevalue = 1, inverse = TRUE)
-
-ref.dist.r <- ini.dist.r %>% # used as reference to calculate the accuracy of the dispersal()-output.
-  terra::mask(vect(st_buffer(ref.p, 5000)), updatevalue = 1, inverse = TRUE)
-
-nodes$occ <- terra::extract(ini.dist.r, vect(nodes))[, 2]
-ini.nodes <- nodes %>% dplyr::filter(occ == 1)
-ini.nodes <- ini.nodes$ID
-#
-#
-#
-
-spread.val <- 1
-thresh.disp.factor <- 0.75
-time.steps <- 3
-agg.acc.fact <- 1
-acc.vect <- ger
-min.tr <- 0
-max.dist <- 500000
-
-ext(ref.dist.r) == ext(empty.r)
-
-## run function ----------------------------------------------------------------
-out <- dispersal(
-  land.spread = TRUE,
-  net.spread = TRUE,
-  spread.val = spread.val,
-  thresh.disp.factor = thresh.disp.factor, 
-  time.steps = time.steps,
-  dist.ini = sen.ini,
-  ini.nodes = ini.nodes,
-  ref.raster = ref.raster,
-  result.r = empty.r,
-  ref.dist.r = ref.dist.r,
-  plot.result = TRUE, 
-  sample.nodes.from.raster = TRUE,
-  unsuitability.mask = mask,
-  acc.vect = acc.vect,
-  min.tr = min.tr,
-  max.dist = max.dist
-)
-
-par(mfrow = c(2,2))
-plot(ini.dist.r, 
-     main = "initial distribution", 
-     background = "darkgrey")
-plot(mask(out[[1]],vect(ger)), 
-     main = paste(
-       "s.v =", spread.val, ";",
-       "t.s =", time.steps, ";",
-       "\nt.d.f =", thresh.disp.factor, ";",
-       "transformation ^5"), 
-     background = "darkgrey")
-plot(mask(out[[1]],vect(ger)), 
-     main = paste(
-       "s.v =", spread.val, ";",
-       "t.s =", time.steps, ";",
-       "\nt.d.f =", thresh.disp.factor, ";",
-       "ini.points = green ;",
-       "\nreached ua (sim.) = red"), 
-     background = "darkgrey")
-plot(sen.ini, add = TRUE, col = "darkgreen", pch = 19) # starting points
-plot(dplyr::filter(nodes, ID %in% out[[2]])[,1], add = TRUE, col = "red", pch = 19) # reached ua
-plot(ref.dist.r, 
-     main = "final reference distribution", 
-     background = "darkgrey")
-out[[3]]
-out[[4]] <- mask(out[[4]], vect(ger))
-plot(out[[4]])
-
-###
-# end senecio
-###
-###
-###
-###
-###
 
 
 # Myocastor coypus -------------------------------------------------------------
