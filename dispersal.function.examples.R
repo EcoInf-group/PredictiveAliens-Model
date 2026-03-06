@@ -11,35 +11,35 @@ library(gridprocess) # devtools::install_github("ethanplunkett/gridprocess")
 dispersal <- function(land.spread = TRUE, # logical, is spread through the landscape allowed?
                       net.spread = FALSE, # logical, is spread through the network allowed?
                       
-                      dist.ini, # initial distribution coordinates from where the species spreads through the landscape
-                      spread.val = 1, # how far can the species spread in gridprocess::rawspread?
+                      dist.ini, # initial distribution coordinates from where the species spreads through the landscape or can enter the network if sample.nodes.from.raster = TRUE
+                      spread.val = 1, # movement budget for a species per time.step (gridprocess::rawspread())
                       thresh.disp.factor = 0.9, # how much of the spread.val must a pixel receive to be treated as occupied?
-                      ini.nodes, # initial urban areas from which the species can spread through the traffic network AND the landscape
+                      ini.nodes, # IDs of initial urban areas from which the species can spread through the traffic network AND the landscape
                       ref.raster, # reference raster (resolution etc.) for the output
                       result.r, # empty raster that will be updated after each time.step and thus turned into the result raster.
                       
-                      initiation = 1, # the initial traffic budget that each used node gets per time.step. this will then be distributed among all outgoing paths relative to the traffic flow on each path.
-                      # I tried to scale this with gdp of the respective node, but that did not improve the output. OPEN FOR DISCUSSION.
-                      
-                      time.steps = 2, # how many iterations should the simulation run?
+                      time.steps = 2, # Integer of the number of iterations that the simulations should run.
 
                       ref.dist.r, # reference raster with the final known distribution with cells being present (1) or absent (0), used for accuracy calculation
                       # the result.r output raster will be compared with this and the values needed for accuracy calculation derived from the comparison.
                       
-                      plot.result = TRUE, # does not automatically plot anything, just makes an output raster if TRUE
-                      
-                      sample.nodes.from.raster = TRUE, # if TRUE then urban areas which are within the occupied areas on the result raster will be treated as 
+                      sample.nodes.from.raster = TRUE, # if TRUE urban areas which are within occupied areas in the landscape raster will be treated as 
                       # occupied and can serve as starting point in the traffic network. this allows a species to enter the traffic network from the landscape.
                       
                       unsuitability.mask = NULL, # if provided then every cell which is provided will be set to unoccupied at end of each time step. can be used
                       # to make sure that unsuitable cells will not become occupied. they might still be crossed though.
                       
                       acc.vect = NULL, # accuracy vector; area inside which the accuracy will be calculated.
-                      agg.acc.fact = 1, # how much should the output be aggregated before calculation of accuracy (too avoid overly fine-scaled output and accuracy calculations)?
+                      agg.acc.fact = 1, # integer, defines how much the output is be aggregated (terra::aggregate()) before calculation of accuracy (too avoid overly fine-scaled output and accuracy calculations).
                       min.tr = 0, # traffic network: minimum traffic volume that paths must have to be used at all.
-                      max.dist = 500000# traffic network: maximum length that a path can have to be used (longer distances than this value will not be traveled)
+                      max.dist = 500000, # traffic network: maximum length of paths in the traffic network (longer distances than this value will not be traveled).
+                      
+                      plot.result = TRUE # provides output raster if TRUE.
 ) {
   a.int <- Sys.time() # just to keep track of how much time the simulation needs.
+  
+  initiation = 1 # the initial traffic budget that each used node gets per time.step. this will then be distributed among all outgoing paths relative to the traffic flow on each path.
+  # I tried to scale this with gdp of the respective node, but that did not improve the output. OPEN FOR DISCUSSION.
   
   eu.links <- eu.links %>% # filter for all paths which are connected with the chosen start.node
     dplyr::filter(predicted >= min.tr) %>% # filter all paths that have at least the given traffic volume
@@ -334,13 +334,13 @@ gbm.r <- 1 / max(values(gbm.r), na.rm = TRUE) * gbm.r # with this step it is set
 gbm.r <- terra::mask(gbm.r, vect(ger))
 gbm.r <- subst(gbm.r, NA, 0)
 
-mask.thresh <- 0.4
+mask.thresh <- 0.3
 mask <- which.lyr(gbm.r[[1]] <= mask.thresh) %>%  # gets a spatraster that has only cells which are 0 in gbm.r (i.e. which are unsuitable)
   #terra::mask(vect(ger)) %>%           # crops it to the area of interest -> CHECK IF NECESSARY # deleted because if I do this, then the grid allows to cross borders over time
   cells()                               # gets the cell numbers; these are then set to 0 (i.e. unoccupied in the result.r in the dispersal() function)
 
 gbm.r[gbm.r < mask.thresh] <- 0
-gbm.r <- gbm.r ^ 2 # exponential conversion instead of linear.
+gbm.r <- gbm.r ^ 1.5 # exponential conversion instead of linear.
 gbm.r <- 1 / max(values(gbm.r), na.rm = TRUE) * gbm.r # with this step it is set to a scale of 0 to 1 irrespective of the transformation
 gbm.r[mask] <- 0
 
@@ -418,9 +418,16 @@ empty.r[!is.na(empty.r)] <- 0 # create empty raster with no connections or anyth
 
 ini.dist.r <- empty.r %>%
   terra::mask(vect(st_buffer(sen.ini, 5000)), updatevalue = 1, inverse = TRUE)
+plot(ini.dist.r)
+#ini.dist.r <- empty.r %>%
+#  terra::mask(vect(sen.ini), updatevalue = 1, inverse = TRUE)
+
 
 ref.dist.r <- ini.dist.r %>% # used as reference to calculate the accuracy of the dispersal()-output.
   terra::mask(vect(st_buffer(ref.p, 5000)), updatevalue = 1, inverse = TRUE)
+#ref.dist.r <- ini.dist.r %>% # used as reference to calculate the accuracy of the dispersal()-output.
+#  terra::mask(vect(ref.p), updatevalue = 1, inverse = TRUE)
+plot(ref.dist.r)
 
 nodes$occ <- terra::extract(ini.dist.r, vect(nodes))[, 2]
 ini.nodes <- nodes %>% dplyr::filter(occ == 1)
@@ -429,9 +436,9 @@ ini.nodes <- ini.nodes$ID
 #
 #
 
-spread.val <- 1
-thresh.disp.factor <- 0.75
-time.steps <- 3
+spread.val <- 10
+thresh.disp.factor <- 0.1
+time.steps <-5
 agg.acc.fact <- 1
 acc.vect <- ger
 min.tr <- 0
@@ -485,7 +492,73 @@ plot(ref.dist.r,
      background = "darkgrey")
 out[[3]]
 out[[4]] <- mask(out[[4]], vect(ger))
+x11()
 plot(out[[4]])
+
+#
+#
+#
+#
+#
+## parameter estimation --------------------------------------------------------
+accuracy.list <- tibble(accuracy = numeric(), 
+                        spread.val = numeric(),
+                        thresh.disp.factor = numeric(),
+                        min.tr = numeric(), 
+                        max.dist = numeric())
+
+parameters <- tidyr::crossing(
+  spread.val = c(0.9, 1, 1.5, 2),
+  thresh.disp.factor = c(0.3, 0.6, 0.9),
+  min.tr = c(0.1, 0.5, 0.9),
+  max.dist = c(50000, 250000, 500000)
+)
+
+
+for(i.p in 1:nrow(parameters)){
+  print(i.p)
+  spread.val <- parameters[i.p,]$spread.val
+  thresh.disp.factor <- parameters[i.p,]$thresh.disp.factor
+  time.steps <- 10
+  min.tr <- quantile(eu.links$predicted, probs = c(parameters[i.p,]$min.tr), na.rm = TRUE)[[1]]
+  #min.tr <- 0.5 # derived from the reference distribution (see below)
+  max.dist <- parameters[i.p,]$max.dist
+  
+  out <- dispersal(
+    land.spread = TRUE,
+    net.spread = TRUE,
+    spread.val = spread.val,
+    thresh.disp.factor = thresh.disp.factor, 
+    time.steps = time.steps,
+    dist.ini = sen.ini,
+    ini.nodes = ini.nodes,
+    ref.raster = ref.raster,
+    result.r = empty.r,
+    ref.dist.r = ref.dist.r,
+    plot.result = TRUE, 
+    sample.nodes.from.raster = TRUE,
+    unsuitability.mask = mask,
+    acc.vect = acc.vect,
+    min.tr = min.tr,
+    max.dist = max.dist
+  )
+  
+  if(i.p == 1){
+    out$accuracies$min.tr.quantile <- parameters[i.p,]$min.tr.quantile
+    optim.output <- out$accuracies
+  } else {
+    out$accuracies$min.tr.quantile <- parameters[i.p,]$min.tr.quantile
+    optim.output <- bind_rows(optim.output, out$accuracies)
+  }
+  
+}
+
+save <- optim.output
+#
+#
+#
+#
+#
 
 ###
 # end senecio
@@ -1180,7 +1253,7 @@ parameters <- tidyr::crossing(
   spread.val = c(0.9, 1, 1.5, 2),
   thresh.disp.factor = c(0.3, 0.6, 0.9),
   min.tr = c(0.1, 0.5, 0.9),
-  max.dist = c(100000, 350000, 500000)
+  max.dist = c(50000, 250000, 500000)
 )
 
 
