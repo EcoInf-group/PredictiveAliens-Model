@@ -7,6 +7,7 @@ library(terra)
 library(dplyr)
 library(sf)
 library(gridprocess) # devtools::install_github("ethanplunkett/gridprocess")
+library(mltools)
 
 dispersal <- function(land.spread = TRUE, # logical, is spread through the landscape allowed?
                       net.spread = FALSE, # logical, is spread through the network allowed?
@@ -198,6 +199,8 @@ dispersal <- function(land.spread = TRUE, # logical, is spread through the lands
     #
     #
     
+    result.r <- mask(result.r, ref.raster)
+    
     # accuracy measurement with whole raster, better use this option
     if(!is.null(acc.vect)){
       result.r.agg <- aggregate(result.r, agg.acc.fact, fun = "mean", na.rm = TRUE) %>% # changing the resolution of the reference and output rasters can change the accuracy result. the ref.raster is aggregated and masked only once at beginning of the function loop
@@ -220,6 +223,11 @@ dispersal <- function(land.spread = TRUE, # logical, is spread through the lands
     FN <- sum(pred.neg %in% ref.pos) # uses cell.IDs to check which are correct/false
         
     accuracy <- (TP + TN) / (TP + FP + FN + TN)
+    precision <- TP / (TP + FP) #  how many of all positives are correctly classified as positive?
+    recall <- TP / (TP + FN) # how well are positives detected/predicted?
+    F1 <- 2* ((precision * recall) / (precision + recall)) # F-score, especially suited for imbalanced datasets (e.g. were one class if overrepresented)
+    MCC <- mltools::mcc(TP = TP, FP = FP, TN = TN, FN = FN) # Matthews correlation coefficient, also suited for imbalanced datasets (e.g. were one class if overrepresented)
+    # needs mltools::mcc because of integer overflow if calculated with numbers (basically too large numbers)
     #
     #
     #
@@ -230,6 +238,10 @@ dispersal <- function(land.spread = TRUE, # logical, is spread through the lands
     if(t.s == 1){
       plot.stack <- result.r
       accuracy.list <- tibble(accuracy = accuracy, # all this is in the output of the function.
+                              precision = precision,
+                              recall = recall,
+                              F1 = F1,
+                              MCC = MCC,
                               spread.val = spread.val,
                               thresh.disp.factor = thresh.disp.factor,
                               time.step = t.s,
@@ -240,6 +252,10 @@ dispersal <- function(land.spread = TRUE, # logical, is spread through the lands
     } else {
       plot.stack <- c(plot.stack, result.r)
       accuracy.list.update <- tibble(accuracy = accuracy, 
+                              precision = precision,
+                              recall = recall,
+                              F1 = F1,
+                              MCC = MCC,
                               spread.val = spread.val,
                               thresh.disp.factor = thresh.disp.factor,
                               time.step = t.s,
@@ -319,7 +335,7 @@ sen.ini <- sen.spread %>% # filter based on record day which occurrence records 
 # final reference distribution:
 # here try with regions invaded by 2004/2009 (i.e. time.step = 4)
 ref.p <- sen.spread %>%
-  dplyr::filter(year <= 2009)
+  dplyr::filter(year <= 1999)
 #
 #
 #
@@ -331,10 +347,10 @@ gbm.r <- rast("data/simulation input data/senecio inaequidens/biomod2_GBM.2PA.av
   project(ref.raster)
 names(gbm.r) <- "layer"
 gbm.r <- 1 / max(values(gbm.r), na.rm = TRUE) * gbm.r # with this step it is set to a scale of 0 to 1 irrespective of the transformation
-gbm.r <- terra::mask(gbm.r, vect(ger))
+gbm.r <- terra::mask(gbm.r, ref.raster)
 gbm.r <- subst(gbm.r, NA, 0)
 
-mask.thresh <- 0.3
+mask.thresh <- 0.35
 mask <- which.lyr(gbm.r[[1]] <= mask.thresh) %>%  # gets a spatraster that has only cells which are 0 in gbm.r (i.e. which are unsuitable)
   #terra::mask(vect(ger)) %>%           # crops it to the area of interest -> CHECK IF NECESSARY # deleted because if I do this, then the grid allows to cross borders over time
   cells()                               # gets the cell numbers; these are then set to 0 (i.e. unoccupied in the result.r in the dispersal() function)
@@ -343,6 +359,8 @@ gbm.r[gbm.r < mask.thresh] <- 0
 gbm.r <- gbm.r ^ 1.5 # exponential conversion instead of linear.
 gbm.r <- 1 / max(values(gbm.r), na.rm = TRUE) * gbm.r # with this step it is set to a scale of 0 to 1 irrespective of the transformation
 gbm.r[mask] <- 0
+x11()
+plot(gbm.r)
 
 gbm.r.inv <- gbm.r * -1 + max(values(gbm.r[[1]]), na.rm = TRUE) # invert raster for creation of resistance matrix
 
@@ -417,14 +435,16 @@ empty.r <- ref.raster
 empty.r[!is.na(empty.r)] <- 0 # create empty raster with no connections or anything
 
 ini.dist.r <- empty.r %>%
-  terra::mask(vect(st_buffer(sen.ini, 5000)), updatevalue = 1, inverse = TRUE)
+  terra::mask(vect(st_buffer(sen.ini, 10000)), updatevalue = 1, inverse = TRUE) %>%
+  mask(ref.raster) # has to be masked again because otherwise the buffered occurrence points extent beyond the country borders
 plot(ini.dist.r)
 #ini.dist.r <- empty.r %>%
 #  terra::mask(vect(sen.ini), updatevalue = 1, inverse = TRUE)
 
 
 ref.dist.r <- ini.dist.r %>% # used as reference to calculate the accuracy of the dispersal()-output.
-  terra::mask(vect(st_buffer(ref.p, 5000)), updatevalue = 1, inverse = TRUE)
+  terra::mask(vect(st_buffer(ref.p, 10000)), updatevalue = 1, inverse = TRUE) %>%
+  mask(ref.raster) # has to be masked again because otherwise the buffered occurrence points extent beyond the country borders
 #ref.dist.r <- ini.dist.r %>% # used as reference to calculate the accuracy of the dispersal()-output.
 #  terra::mask(vect(ref.p), updatevalue = 1, inverse = TRUE)
 plot(ref.dist.r)
@@ -436,13 +456,13 @@ ini.nodes <- ini.nodes$ID
 #
 #
 
-spread.val <- 10
-thresh.disp.factor <- 0.1
-time.steps <-5
+spread.val <- 2
+thresh.disp.factor <- 0.5
+time.steps <- 50
 agg.acc.fact <- 1
-acc.vect <- ger
-min.tr <- 0
-max.dist <- 500000
+acc.vect <- st_union(st_buffer(ref.p, 30000))
+min.tr <- quantile(eu.links$predicted, probs = 0.95, na.rm = TRUE)[[1]]
+max.dist <- 1000000
 
 ext(ref.dist.r) == ext(empty.r)
 
@@ -455,9 +475,11 @@ out <- dispersal(
   time.steps = time.steps,
   dist.ini = sen.ini,
   ini.nodes = ini.nodes,
-  ref.raster = ref.raster,
+  
+  ref.raster = empty.r,
   result.r = empty.r,
   ref.dist.r = ref.dist.r,
+  
   plot.result = TRUE, 
   sample.nodes.from.raster = TRUE,
   unsuitability.mask = mask,
@@ -470,14 +492,14 @@ par(mfrow = c(2,2))
 plot(ini.dist.r, 
      main = "initial distribution", 
      background = "darkgrey")
-plot(mask(out[[1]],vect(ger)), 
+plot(out[[1]], 
      main = paste(
        "s.v =", spread.val, ";",
        "t.s =", time.steps, ";",
        "\nt.d.f =", thresh.disp.factor, ";",
        "transformation ^5"), 
      background = "darkgrey")
-plot(mask(out[[1]],vect(ger)), 
+plot(out[[1]], 
      main = paste(
        "s.v =", spread.val, ";",
        "t.s =", time.steps, ";",
@@ -491,9 +513,20 @@ plot(ref.dist.r,
      main = "final reference distribution", 
      background = "darkgrey")
 out[[3]]
-out[[4]] <- mask(out[[4]], vect(ger))
+out[[3]] %>% dplyr::filter(accuracy == max(out[[3]]$accuracy))
+out[[3]] %>% dplyr::filter(precision == max(out[[3]]$precision))
+out[[3]] %>% dplyr::filter(recall == max(out[[3]]$recall))
+out[[3]] %>% dplyr::filter(F1 == max(out[[3]]$F1))
+out[[3]] %>% dplyr::filter(MCC == max(out[[3]]$MCC))
+out[[3]]$performance.sum <- rowSums(out[[3]][,4:5]) # left accuracy out
+# then this is best: 
+plot(out[[4]][[26]]) # this also has the highest F-score and is also my guess just based on what it looks like
+# so maybe rely on F-score, or the sum of all? or only sum(F-score, mcc)? but the latter output looks wrong
+
+out[[4]] <- mask(out[[4]], ref.raster)
 x11()
-plot(out[[4]])
+plot(out[[4]][[5]])
+plot(acc.vect, add = TRUE)
 
 #
 #
@@ -501,17 +534,16 @@ plot(out[[4]])
 #
 #
 ## parameter estimation --------------------------------------------------------
-accuracy.list <- tibble(accuracy = numeric(), 
-                        spread.val = numeric(),
-                        thresh.disp.factor = numeric(),
-                        min.tr = numeric(), 
-                        max.dist = numeric())
+#accuracy.list <- tibble(accuracy = numeric(), 
+#                        spread.val = numeric(),
+#                        thresh.disp.factor = numeric(),
+#                        min.tr = numeric(), 
+#                        max.dist = numeric())
 
 parameters <- tidyr::crossing(
   spread.val = c(0.9, 1, 1.5, 2),
-  thresh.disp.factor = c(0.3, 0.6, 0.9),
-  min.tr = c(0.1, 0.5, 0.9),
-  max.dist = c(50000, 250000, 500000)
+  thresh.disp.factor = c(0.5, 0.75, 1),
+  min.tr = c(0.1, 0.5, 0.95)
 )
 
 
@@ -519,10 +551,10 @@ for(i.p in 1:nrow(parameters)){
   print(i.p)
   spread.val <- parameters[i.p,]$spread.val
   thresh.disp.factor <- parameters[i.p,]$thresh.disp.factor
-  time.steps <- 10
+  time.steps <- 30
   min.tr <- quantile(eu.links$predicted, probs = c(parameters[i.p,]$min.tr), na.rm = TRUE)[[1]]
   #min.tr <- 0.5 # derived from the reference distribution (see below)
-  max.dist <- parameters[i.p,]$max.dist
+  max.dist <- 1000000
   
   out <- dispersal(
     land.spread = TRUE,
@@ -550,7 +582,6 @@ for(i.p in 1:nrow(parameters)){
     out$accuracies$min.tr.quantile <- parameters[i.p,]$min.tr.quantile
     optim.output <- bind_rows(optim.output, out$accuracies)
   }
-  
 }
 
 save <- optim.output
