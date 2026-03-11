@@ -12,14 +12,17 @@ library(mltools)
 dispersal <- function(land.spread = TRUE, # logical, is spread through the landscape allowed?
                       net.spread = FALSE, # logical, is spread through the network allowed?
                       
-                      dist.ini, # initial distribution coordinates from where the species spreads through the landscape or can enter the network if sample.nodes.from.raster = TRUE
-                      spread.val = 1, # movement budget for a species per time.step (gridprocess::rawspread())
+                      dist.ini, # initial distribution coordinates from where the species spreads through the landscape
+                      spread.val = 1, # how far can the species spread in gridprocess::rawspread?
                       thresh.disp.factor = 0.9, # how much of the spread.val must a pixel receive to be treated as occupied?
-                      ini.nodes, # IDs of initial urban areas from which the species can spread through the traffic network AND the landscape
+                      ini.nodes, # initial urban areas from which the species can spread through the traffic network AND the landscape
                       ref.raster, # reference raster (resolution etc.) for the output
                       result.r, # empty raster that will be updated after each time.step and thus turned into the result raster.
                       
-                      time.steps = 2, # Integer of the number of iterations that the simulations should run.
+                      initiation = 1, # the initial traffic budget that each used node gets per time.step. this will then be distributed among all outgoing paths relative to the traffic flow on each path.
+                      # I tried to scale this with gdp of the respective node, but that did not improve the output. OPEN FOR DISCUSSION.
+                      
+                      time.steps = 2, # how many iterations should the simulation run?
 
                       ref.dist.r, # reference raster with the final known distribution with cells being present (1) or absent (0), used for accuracy calculation
                       # the result.r output raster will be compared with this and the values needed for accuracy calculation derived from the comparison.
@@ -198,8 +201,6 @@ dispersal <- function(land.spread = TRUE, # logical, is spread through the lands
     #
     #
     #
-    
-    result.r <- mask(result.r, ref.raster)
     
     # accuracy measurement with whole raster, better use this option
     if(!is.null(acc.vect)){
@@ -1110,13 +1111,15 @@ gbm.r.inv <- gbm.r*-1 + max(values(gbm.r[[1]]), na.rm = TRUE) # invert raster fo
 limit <- max(values(gbm.r.inv), na.rm = TRUE)
 #spread.limit <- limit*100 # set value for areas which are not crossable
 gbm.r.inv <- subst(gbm.r.inv, # must not have NAs for the function below, so replace with spread.limit to make these areas not crossable
-                   1, 
-                   9999) # the final 
+                   1, 9999) # the final
 # plot(gbm.r.inv) # no network visible in plot anymore if limit much higher than maximum value in network becaus of color-scale. reduce spread.limit to make it visible again.
-gbm.r.inv <- asgrid(gbm.r.inv, # convert to grid for spread function
-                    xll = xmin(gbm.r.inv),
-                    yll = ymin(gbm.r.inv),
-                    cellsize = 1000) # update cellsize with the aggregate factor * 1000m
+gbm.r.inv <- asgrid(
+  gbm.r.inv,
+  # convert to grid for spread function
+  xll = xmin(gbm.r.inv),
+  yll = ymin(gbm.r.inv),
+  cellsize = 1000
+) # update cellsize with the aggregate factor * 1000m
 #
 #
 #
@@ -1212,6 +1215,7 @@ acc.vect <- gadm.0
 min.tr <- quantile(eu.links$predicted, probs = c(0.50), na.rm = TRUE)[[1]] # probs defines which quantile of the traffic volumes is used as minimum traffic value that filter or paths which are used in the traffic network.
 max.dist <- 350000 # paths in the network longer than this will not be used, in meter.
 
+## run function ----------------------------------------------------------------
 out <- dispersal(
   land.spread = TRUE,
   net.spread = FALSE,
