@@ -223,10 +223,12 @@ dispersal <- function(land.spread = TRUE, # logical, is spread through the lands
     FN <- sum(pred.neg %in% ref.pos) # uses cell.IDs to check which are correct/false
         
     accuracy <- (TP + TN) / (TP + FP + FN + TN)
-    precision <- TP / (TP + FP) #  how many of all positives are correctly classified as positive?
-    recall <- TP / (TP + FN) # how well are positives detected/predicted?
-    F1 <- 2* ((precision * recall) / (precision + recall)) # F-score, especially suited for imbalanced datasets (e.g. were one class if overrepresented)
-    MCC <- mltools::mcc(TP = TP, FP = FP, TN = TN, FN = FN) # Matthews correlation coefficient, also suited for imbalanced datasets (e.g. were one class if overrepresented)
+    precision <- TP / (TP + FP) #  how many of all positives are correctly classified as positive? range: 0 - 1
+    sensitivity <- TP / (TP + FN) # of all predicted presences, how many are actual presences? range: 0 - 1
+    specificity <- TN / (TN + FP) # how well does the model predict correct absences? range: 0 - 1
+    TSS <- sensitivity + specificity - 1
+    F1 <- 2 * ((precision * sensitivity) / (precision + sensitivity)) # F-score, range: 0 - 1, especially suited for imbalanced datasets (e.g. were one class if overrepresented), right now seems to be the most adequate by visually comparing the outputs and the references
+    MCC <- mltools::mcc(TP = TP, FP = FP, TN = TN, FN = FN) # Matthews correlation coefficient, range: -1 - 1, also suited for imbalanced datasets (e.g. were one class if overrepresented)
     # needs mltools::mcc because of integer overflow if calculated with numbers (basically too large numbers)
     #
     #
@@ -239,7 +241,9 @@ dispersal <- function(land.spread = TRUE, # logical, is spread through the lands
       plot.stack <- result.r
       accuracy.list <- tibble(accuracy = accuracy, # all this is in the output of the function.
                               precision = precision,
-                              recall = recall,
+                              sensitivity = sensitivity,
+                              specificity = specificity,
+                              TSS = TSS,
                               F1 = F1,
                               MCC = MCC,
                               spread.val = spread.val,
@@ -248,12 +252,16 @@ dispersal <- function(land.spread = TRUE, # logical, is spread through the lands
                               initiation = initiation,
                               agg.acc.fact = agg.acc.fact, 
                               min.tr = min.tr, 
-                              max.dist = max.dist)
+                              max.dist = max.dist,
+                              land.spread = land.spread,
+                              net.spread = net.spread)
     } else {
       plot.stack <- c(plot.stack, result.r)
       accuracy.list.update <- tibble(accuracy = accuracy, 
                               precision = precision,
-                              recall = recall,
+                              sensitivity = sensitivity,
+                              specificity = specificity,
+                              TSS = TSS,
                               F1 = F1,
                               MCC = MCC,
                               spread.val = spread.val,
@@ -262,7 +270,9 @@ dispersal <- function(land.spread = TRUE, # logical, is spread through the lands
                               initiation = initiation,
                               agg.acc.fact = agg.acc.fact, 
                               min.tr = min.tr, 
-                              max.dist = max.dist)
+                              max.dist = max.dist,
+                              land.spread = land.spread,
+                              net.spread = net.spread)
       accuracy.list <- bind_rows(accuracy.list, 
                                  accuracy.list.update)
       }
@@ -376,6 +386,10 @@ gbm.r.inv <- asgrid(
   yll = ymin(gbm.r.inv),
   cellsize = 1000
 ) # update cellsize with the aggregate factor * 1000m
+
+# for parametrization loop:
+power.1.5 <- gbm.r.inv
+
 #
 #
 #
@@ -388,15 +402,24 @@ gbm.r.inv <- asgrid(
 #
 ### plot to check if all data align and see what they look like. ---------------
 plot(gbm.r)
-plot(ref.p[, 1],
-     add = TRUE ,
-     col = "yellow",
-     pch = 19)
+
+
+ref.p %>% dplyr::filter(decade <= 2025) %>% 
+  plot(add = TRUE, col = "yellow",
+       pch = 19)
+ref.p %>% dplyr::filter(decade <= 1999) %>% 
+  plot(add = TRUE, col = "orange",
+       pch = 19)
 plot(sen.ini[, 1],
      add = TRUE,
      col = "red",
      pch = 19)
 #
+plot(ref.p[, 1],
+     add = TRUE ,
+     col = "yellow",
+     pch = 19)
+
 #
 #
 
@@ -456,12 +479,13 @@ ini.nodes <- ini.nodes$ID
 #
 #
 
-spread.val <- 2
+spread.val <- 1
 thresh.disp.factor <- 0.5
-time.steps <- 50
+time.steps <- 3
 agg.acc.fact <- 1
 acc.vect <- st_union(st_buffer(ref.p, 30000))
-min.tr <- quantile(eu.links$predicted, probs = 0.95, na.rm = TRUE)[[1]]
+min.tr <- 2.89
+  #quantile(eu.links$predicted, probs = 0.95, na.rm = TRUE)[[1]]
 max.dist <- 1000000
 
 ext(ref.dist.r) == ext(empty.r)
@@ -469,7 +493,7 @@ ext(ref.dist.r) == ext(empty.r)
 ## run function ----------------------------------------------------------------
 out <- dispersal(
   land.spread = TRUE,
-  net.spread = TRUE,
+  net.spread = FALSE,
   spread.val = spread.val,
   thresh.disp.factor = thresh.disp.factor, 
   time.steps = time.steps,
@@ -515,7 +539,7 @@ plot(ref.dist.r,
 out[[3]]
 out[[3]] %>% dplyr::filter(accuracy == max(out[[3]]$accuracy))
 out[[3]] %>% dplyr::filter(precision == max(out[[3]]$precision))
-out[[3]] %>% dplyr::filter(recall == max(out[[3]]$recall))
+out[[3]] %>% dplyr::filter(sensitivity == max(out[[3]]$sensitivity))
 out[[3]] %>% dplyr::filter(F1 == max(out[[3]]$F1))
 out[[3]] %>% dplyr::filter(MCC == max(out[[3]]$MCC))
 out[[3]]$performance.sum <- rowSums(out[[3]][,4:5]) # left accuracy out
@@ -541,9 +565,10 @@ plot(acc.vect, add = TRUE)
 #                        max.dist = numeric())
 
 parameters <- tidyr::crossing(
-  spread.val = c(0.9, 1, 1.5, 2),
+  spread.val = c(1, 1.5, 2),
   thresh.disp.factor = c(0.5, 0.75, 1),
-  min.tr = c(0.1, 0.5, 0.95)
+  min.tr = c(0.1, 0.5, 0.95),
+  transformation = c("power.1", "power.1.5", "power.2")
 )
 
 
@@ -551,14 +576,16 @@ for(i.p in 1:nrow(parameters)){
   print(i.p)
   spread.val <- parameters[i.p,]$spread.val
   thresh.disp.factor <- parameters[i.p,]$thresh.disp.factor
-  time.steps <- 30
+  time.steps <- 40
   min.tr <- quantile(eu.links$predicted, probs = c(parameters[i.p,]$min.tr), na.rm = TRUE)[[1]]
   #min.tr <- 0.5 # derived from the reference distribution (see below)
   max.dist <- 1000000
+  gbm.r.inv <- get(parameters[i.p,]$transformation)
+  
   
   out <- dispersal(
     land.spread = TRUE,
-    net.spread = TRUE,
+    net.spread = FALSE,
     spread.val = spread.val,
     thresh.disp.factor = thresh.disp.factor, 
     time.steps = time.steps,
@@ -577,14 +604,23 @@ for(i.p in 1:nrow(parameters)){
   
   if(i.p == 1){
     out$accuracies$min.tr.quantile <- parameters[i.p,]$min.tr.quantile
+    out$accuracies$transformation <- parameters[i.p,]$transformation
     optim.output <- out$accuracies
+    # add power here
   } else {
     out$accuracies$min.tr.quantile <- parameters[i.p,]$min.tr.quantile
+    out$accuracies$transformation <- parameters[i.p,]$transformation
     optim.output <- bind_rows(optim.output, out$accuracies)
+    # add power here
   }
 }
 
+write.csv(optim.output,
+          "data/simulation output/senecio inaequidens/optim.output.net.spreadFALSE.csv", 
+          row.names = FALSE)
 save <- optim.output
+
+optim.output %>% dplyr::filter(F1 == max(optim.output$F1))
 #
 #
 #
@@ -895,6 +931,75 @@ out <- dispersal(
 #
 #
 #
+
+
+#
+#
+#
+#
+#
+## parameter estimation --------------------------------------------------------
+#accuracy.list <- tibble(accuracy = numeric(), 
+#                        spread.val = numeric(),
+#                        thresh.disp.factor = numeric(),
+#                        min.tr = numeric(), 
+#                        max.dist = numeric())
+
+parameters <- tidyr::crossing(
+  spread.val = c(1, 1.5, 2),
+  thresh.disp.factor = c(0.5, 0.75, 1),
+  min.tr = c(0.1, 0.5, 0.95),
+  transformation = c("power.1", "power.2", "power.3"),
+  net.spread = c(FALSE) # with TRUE on other core
+)
+
+
+for(i.p in 1:nrow(parameters)){
+  print(i.p)
+  spread.val <- parameters[i.p,]$spread.val
+  thresh.disp.factor <- parameters[i.p,]$thresh.disp.factor
+  time.steps <- 21
+  min.tr <- quantile(eu.links$predicted, probs = c(parameters[i.p,]$min.tr), na.rm = TRUE)[[1]]
+  #min.tr <- 0.5 # derived from the reference distribution (see below)
+  max.dist <- 350000
+  gbm.r.inv <- get(parameters[i.p,]$transformation)
+  
+  
+  out <- dispersal(
+    land.spread = TRUE,
+    net.spread = parameters[i.p,]$net.spread,
+    spread.val = spread.val,
+    thresh.disp.factor = thresh.disp.factor, 
+    time.steps = time.steps,
+    dist.ini = tap.mag.ini,
+    ini.nodes = ini.nodes,
+    ref.raster = empty.r,
+    result.r = empty.r,
+    ref.dist.r = ref.dist.r,
+    plot.result = TRUE, 
+    sample.nodes.from.raster = TRUE,
+    unsuitability.mask = mask,
+    acc.vect = acc.vect,
+    min.tr = min.tr,
+    max.dist = max.dist
+  )
+  
+  if(i.p == 1){
+    out$accuracies$min.tr.quantile <- parameters[i.p,]$min.tr.quantile
+    out$accuracies$transformation <- parameters[i.p,]$transformation
+    optim.output <- out$accuracies
+    # add power here
+  } else {
+    out$accuracies$min.tr.quantile <- parameters[i.p,]$min.tr.quantile
+    out$accuracies$transformation <- parameters[i.p,]$transformation
+    optim.output <- bind_rows(optim.output, out$accuracies)
+    # add power here
+  }
+}
+
+write.csv(optim.output,
+          "data/simulation output/tapinoma magnum/optim.output.net.spread.FALSE.csv", 
+          row.names = FALSE)
 
 #
 #
