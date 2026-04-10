@@ -353,11 +353,6 @@ plot(ini.dist.r)
 ref.p <- sen.spread %>%
   dplyr::filter(year <= 2009)
 
-#ref.dist.r <- ini.dist.r %>% # used as reference to calculate the accuracy of the dispersal()-output.
-#  terra::mask(vect(st_buffer(ref.p, 10000)), updatevalue = 1, inverse = TRUE) %>%
-#  mask(ref.raster) # has to be masked again because otherwise the buffered occurrence points extent beyond the country borders
-#plot(ref.dist.r)
-
 ref.dist.r <- c(terra::mask(ini.dist.r, vect(st_buffer(dplyr::filter(sen.spread, year <= 1989), 10000)), updatevalue = 1, inverse = TRUE),
                 terra::mask(ini.dist.r, vect(st_buffer(dplyr::filter(sen.spread, year <= 1999), 10000)), updatevalue = 1, inverse = TRUE),
                 terra::mask(ini.dist.r, vect(st_buffer(dplyr::filter(sen.spread, year <= 2009), 10000)), updatevalue = 1, inverse = TRUE)
@@ -396,7 +391,7 @@ gbm.r.inv <- gbm.r * -1 + max(values(gbm.r[[1]]), na.rm = TRUE) # invert raster 
 limit <- max(values(gbm.r.inv), na.rm = TRUE)
 #spread.limit <- limit*100 # set value for areas which are not crossable
 gbm.r.inv <- subst(gbm.r.inv, # must not have NAs for the function below, so replace with spread.limit to make these areas not crossable
-                   1, 9999) # the final
+                   c(1,NA), 9999) # the final
 # plot(gbm.r.inv) # no network visible in plot anymore if limit much higher than maximum value in network becaus of color-scale. reduce spread.limit to make it visible again.
 gbm.r.inv <- asgrid(
   gbm.r.inv,
@@ -434,7 +429,7 @@ gbm.r.inv <- gbm.r * -1 + max(values(gbm.r[[1]]), na.rm = TRUE) # invert raster 
 limit <- max(values(gbm.r.inv), na.rm = TRUE)
 #spread.limit <- limit*100 # set value for areas which are not crossable
 gbm.r.inv <- subst(gbm.r.inv, # must not have NAs for the function below, so replace with spread.limit to make these areas not crossable
-                   1, 9999) # the final
+                   c(1,NA), 9999) # the final
 # plot(gbm.r.inv) # no network visible in plot anymore if limit much higher than maximum value in network becaus of color-scale. reduce spread.limit to make it visible again.
 gbm.r.inv <- asgrid(
   gbm.r.inv,
@@ -472,7 +467,7 @@ gbm.r.inv <- gbm.r * -1 + max(values(gbm.r[[1]]), na.rm = TRUE) # invert raster 
 limit <- max(values(gbm.r.inv), na.rm = TRUE)
 #spread.limit <- limit*100 # set value for areas which are not crossable
 gbm.r.inv <- subst(gbm.r.inv, # must not have NAs for the function below, so replace with spread.limit to make these areas not crossable
-                   1, 9999) # the final
+                   c(1,NA), 9999) # the final
 # plot(gbm.r.inv) # no network visible in plot anymore if limit much higher than maximum value in network becaus of color-scale. reduce spread.limit to make it visible again.
 gbm.r.inv <- asgrid(
   gbm.r.inv,
@@ -549,7 +544,7 @@ ini.nodes <- ini.nodes$ID
 
 spread.val <- 1
 thresh.disp.factor <- 0.5
-time.steps <- 40
+time.steps <- 25
 agg.acc.fact <- 1
 acc.vect <- st_union(st_buffer(ref.p, 30000))
 min.tr <- 2.89
@@ -1361,9 +1356,9 @@ out <- dispersal(
   plot.result = TRUE
 )
 
-out[[4]][[20]] %>% 
-  mask(empty.r) %>% 
-  plot()
+out[[4]] <- out[[4]] %>% 
+  mask(empty.r) 
+
 
 #
 #
@@ -1563,7 +1558,7 @@ gbm.r <- rast(
   "data/simulation input data/myocastor coypus/biomod2_GBM.update.bio02.bio6.bio10.bio15.LC.pop.gbif and anna.tif"
 )
 ### occurrence data (anna & gbif) ----------------------------------------------
-myo.coy <- read.csv("PredictiveAliens-Model/simulation input data/myocastor/M coypus gbif 13082025.csv",
+myo.coy <- read.csv("data/species occurrence data/myocastor coypus/M coypus gbif 13082025.csv",
                     sep = "\t")
 myo.coy <- tibble(myocastor = 1,
                   longitude = myo.coy$decimalLongitude,
@@ -1640,7 +1635,7 @@ mask.thresh <- 0.5
 gbm.r[gbm.r <= mask.thresh] <- 0
 # with the extreme cut.off value of 0.5 it is probably not necessary to make a nonlinear conversion
 # to reconstruct the final reference distribution
-# gbm.r <- gbm.r^2 # exponential conversion instead of linear.
+gbm.r <- gbm.r^1 # exponential conversion instead of linear.
 
 mask <- which.lyr(gbm.r[[1]] <= mask.thresh) %>%  # gets a spatraster that has only cells which are 0 in gbm.r (i.e. which are unsuitable)
   # terra::mask(vect(gadm.0)) %>%           # crops it to the area of interest -> CHECK IF NECESSARY
@@ -1652,7 +1647,7 @@ gbm.r.inv <- gbm.r*-1 + max(values(gbm.r[[1]]), na.rm = TRUE) # invert raster fo
 limit <- max(values(gbm.r.inv), na.rm = TRUE)
 #spread.limit <- limit*100 # set value for areas which are not crossable
 gbm.r.inv <- subst(gbm.r.inv, # must not have NAs for the function below, so replace with spread.limit to make these areas not crossable
-                   1, 9999) # the final
+                   c(1,NA), 9999) # the final
 # plot(gbm.r.inv) # no network visible in plot anymore if limit much higher than maximum value in network becaus of color-scale. reduce spread.limit to make it visible again.
 gbm.r.inv <- asgrid(
   gbm.r.inv,
@@ -1661,6 +1656,7 @@ gbm.r.inv <- asgrid(
   yll = ymin(gbm.r.inv),
   cellsize = 1000
 ) # update cellsize with the aggregate factor * 1000m
+power.1 <- gbm.r.inv
 #
 #
 #
@@ -1743,13 +1739,12 @@ ini.nodes <- ini.nodes$ID
 #
 
 ### run function ---------------------------------------------------------------
-
 ext(ref.dist.r) == ext(empty.r)
 
 ini.nodes <-  ini.nodes
 spread.val <- 1
 nodes.cut.off <- 0.1
-time.steps <- 4
+time.steps <- 10
 thresh.disp.factor <- 0.25
 agg.acc.fact <-  10
 acc.vect <- gadm.0
@@ -1760,24 +1755,25 @@ max.dist <- 350000 # paths in the network longer than this will not be used, in 
 out <- dispersal(
   land.spread = TRUE,
   net.spread = FALSE,
-  spread.val = spread.val,
-  thresh.disp.factor = thresh.disp.factor, 
-  time.steps = time.steps,
   dist.ini = myo.coy.xy.ini,
+  spread.val = spread.val,
+  thresh.disp.factor = thresh.disp.factor,
   ini.nodes = ini.nodes,
   ref.raster = empty.r,
-  result.r = empty.r,
+  result.r = empty.r, 
+  gbm.r.inv = "power.1",
+  
+  time.steps = time.steps,
   ref.dist.r = ref.dist.r,
-  plot.result = TRUE, 
+  
   sample.nodes.from.raster = TRUE,
   unsuitability.mask = mask,
+  
   acc.vect = acc.vect,
-  agg.acc.fact = agg.acc.fact,
   min.tr = min.tr,
-  max.dist = max.dist
+  max.dist = max.dist,
+  plot.result = TRUE
 )
-
-
 
 par(mfrow = c(2,2))
 plot(mask(ini.dist.r, vect(gadm.0)), 
