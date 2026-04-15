@@ -1,4 +1,4 @@
-# dispersal simulation function ------------------------------------------------
+# DISPERSAL SIMULATION FUNCTION ------------------------------------------------
 
 setwd("C:/Users/JLU-SU/Nextcloud/Predictive Aliens/")
 
@@ -299,11 +299,10 @@ dispersal <- function(land.spread = TRUE, # logical, is spread through the lands
 #
 #
 #
-# Senecio inaequidens ----------------------------------------------------------
+# SENECIO INAEQUIDENS ----------------------------------------------------------
 # define inputs needed for function:
 ## data preparation ------------------------------------------------------------
 ### geographic reference -------------------------------------------------------
-#ref.raster <- rast("simulation input data/senecio/dgm1000_utm32s.asc") # 1km² Digitales Geländemodell from https://gdz.bkg.bund.de/index.php/default/digitales-gelandemodell-gitterweite-1000-m-dgm1000.html ; 16.05.2025
 ref.raster <- rast("data/simulation input data/senecio inaequidens/biomod2_GBM.2PA.average.bio1.bio12.nitrogen.traffic.LC.tif") %>%
   terra::aggregate(5)
 names(ref.raster) <- "layer"
@@ -376,11 +375,11 @@ gbm.r <- subst(gbm.r, NA, 0)
 
 mask.thresh <- 0.35
 mask <- which.lyr(gbm.r[[1]] <= mask.thresh) %>%  # gets a spatraster that has only cells which are 0 in gbm.r (i.e. which are unsuitable)
-  #terra::mask(vect(ger)) %>%           # crops it to the area of interest -> CHECK IF NECESSARY # deleted because if I do this, then the grid allows to cross borders over time
-  cells()                               # gets the cell numbers; these are then set to 0 (i.e. unoccupied in the result.r in the dispersal() function)
+  #terra::mask(vect(ger)) %>%                     # crops it to the area of interest -> CHECK IF NECESSARY # deleted because if I do this, then the grid allows to cross borders over time
+  cells()                                         # gets the cell numbers; these are then set to 0 (i.e. unoccupied in the result.r in the dispersal() function)
 
 gbm.r[gbm.r < mask.thresh] <- 0
-gbm.r <- gbm.r ^ 1 # exponential conversion instead of linear.
+gbm.r <- gbm.r ^ 1                                # exponential conversion instead of linear.
 gbm.r <- 1 / max(values(gbm.r), na.rm = TRUE) * gbm.r # with this step it is set to a scale of 0 to 1 irrespective of the transformation
 gbm.r[mask] <- 0
 #x11()
@@ -388,20 +387,18 @@ gbm.r[mask] <- 0
 
 gbm.r.inv <- gbm.r * -1 + max(values(gbm.r[[1]]), na.rm = TRUE) # invert raster for creation of resistance matrix
 
-limit <- max(values(gbm.r.inv), na.rm = TRUE)
-#spread.limit <- limit*100 # set value for areas which are not crossable
-gbm.r.inv <- subst(gbm.r.inv, # must not have NAs for the function below, so replace with spread.limit to make these areas not crossable
+gbm.r.inv <- subst(gbm.r.inv, # must not have NAs for the function below, so replace with 9999 to make these areas not crossable
                    c(1,NA), 9999) # the final
-# plot(gbm.r.inv) # no network visible in plot anymore if limit much higher than maximum value in network becaus of color-scale. reduce spread.limit to make it visible again.
-gbm.r.inv <- asgrid(
-  gbm.r.inv,
-  # convert to grid for spread function
+# plot(gbm.r.inv) # no network visible in plot anymore if limit much higher than maximum value in network because of color-scale. reduce spread.limit to make it visible again.
+
+gbm.r.inv <- asgrid( # convert to grid for spread function
+  gbm.r.inv, 
   xll = xmin(gbm.r.inv),
   yll = ymin(gbm.r.inv),
   cellsize = 1000
 ) # update cellsize with the aggregate factor * 1000m
 
-# for parametrization loop:
+# rename for parametrization loop:
 power.1 <- gbm.r.inv
 
 
@@ -426,20 +423,17 @@ gbm.r[mask] <- 0
 
 gbm.r.inv <- gbm.r * -1 + max(values(gbm.r[[1]]), na.rm = TRUE) # invert raster for creation of resistance matrix
 
-limit <- max(values(gbm.r.inv), na.rm = TRUE)
-#spread.limit <- limit*100 # set value for areas which are not crossable
-gbm.r.inv <- subst(gbm.r.inv, # must not have NAs for the function below, so replace with spread.limit to make these areas not crossable
+gbm.r.inv <- subst(gbm.r.inv, # must not have NAs for the function below, so replace with 9999 to make these areas not crossable
                    c(1,NA), 9999) # the final
 # plot(gbm.r.inv) # no network visible in plot anymore if limit much higher than maximum value in network becaus of color-scale. reduce spread.limit to make it visible again.
-gbm.r.inv <- asgrid(
+gbm.r.inv <- asgrid( # convert to grid for spread function
   gbm.r.inv,
-  # convert to grid for spread function
   xll = xmin(gbm.r.inv),
   yll = ymin(gbm.r.inv),
   cellsize = 1000
 ) # update cellsize with the aggregate factor * 1000m
 
-# for parametrization loop:
+# rename for parametrization loop:
 power.1.5 <- gbm.r.inv
 
 
@@ -464,20 +458,17 @@ gbm.r[mask] <- 0
 
 gbm.r.inv <- gbm.r * -1 + max(values(gbm.r[[1]]), na.rm = TRUE) # invert raster for creation of resistance matrix
 
-limit <- max(values(gbm.r.inv), na.rm = TRUE)
-#spread.limit <- limit*100 # set value for areas which are not crossable
-gbm.r.inv <- subst(gbm.r.inv, # must not have NAs for the function below, so replace with spread.limit to make these areas not crossable
+gbm.r.inv <- subst(gbm.r.inv, # must not have NAs for the function below, so replace with 9999 to make these areas not crossable
                    c(1,NA), 9999) # the final
 # plot(gbm.r.inv) # no network visible in plot anymore if limit much higher than maximum value in network becaus of color-scale. reduce spread.limit to make it visible again.
 gbm.r.inv <- asgrid(
-  gbm.r.inv,
-  # convert to grid for spread function
+  gbm.r.inv, # convert to grid for spread function
   xll = xmin(gbm.r.inv),
   yll = ymin(gbm.r.inv),
   cellsize = 1000
 ) # update cellsize with the aggregate factor * 1000m
 
-# for parametrization loop:
+# rename for parametrization loop:
 power.2 <- gbm.r.inv
 
 #
@@ -544,7 +535,7 @@ ini.nodes <- ini.nodes$ID
 
 spread.val <- 1
 thresh.disp.factor <- 0.5
-time.steps <- 25
+time.steps <- 4
 agg.acc.fact <- 1
 acc.vect <- st_union(st_buffer(ref.p, 30000))
 min.tr <- 2.89
@@ -603,82 +594,6 @@ plot(ref.dist.r[[nlyr(ref.dist.r)]],
 out[[3]]
 
 
-out.with.network <- read.csv("data/simulation output/senecio inaequidens/out.with.network.csv")
-out.no.network <- read.csv("data/simulation output/senecio inaequidens/out.no.network.csv")
-
-par(mfrow = c(1,2))
-plot(F.ref.1989 ~ time.step, 
-     data = out.with.network,
-     col = "black",
-     ylim = c(0,1),
-     main = "with traffic network",
-     ylab = "F-score")
-points(y = crit.F * max(out.with.network$F.ref.1989),
-       x = min(which(out.with.network$F.ref.1989 >= crit.F * max(out.with.network$F.ref.1989))),
-       col = "black",
-       pch = 3,
-       lwd = 2,
-       cex = 2)
-
-points(F.ref.1999 ~ time.step, 
-       data = out.with.network,
-       col = "orange")
-points(y = crit.F * max(out.with.network$F.ref.1999),
-       x = min(which(out.with.network$F.ref.1999 >= crit.F * max(out.with.network$F.ref.1999))),
-       col = "orange",
-       pch = 3,
-       lwd = 2,
-       cex = 2)
-
-points(F.ref.2009 ~ time.step, 
-       data = out.with.network,
-       col = "red")
-points(y = crit.F * max(out.with.network$F.ref.2009),
-       x = min(which(out.with.network$F.ref.2009 >= crit.F * max(out.with.network$F.ref.2009))),
-       col = "red",
-       pch = 3,
-       lwd = 2,
-       cex = 2)
-legend("topright", c("1989", "1999", "2009"), border="black", fill = c("black", "orange", "red"))
-
-
-plot(F.ref.1989 ~ time.step, 
-     data = out.no.network,
-     col = "black",
-     ylim = c(0,1),
-     main = "without traffic network",
-     ylab = "F-score")
-points(y = crit.F * max(out.no.network$F.ref.1989),
-       x = min(which(out.no.network$F.ref.1989 >= crit.F * max(out.no.network$F.ref.1989))),
-       col = "black",
-       pch = 3,
-       lwd = 2,
-       cex = 2)
-
-points(F.ref.1999 ~ time.step, 
-       data = out.no.network,
-       col = "orange")
-points(y = crit.F * max(out.no.network$F.ref.1999),
-       x = min(which(out.no.network$F.ref.1999 >= crit.F * max(out.no.network$F.ref.1999))),
-       col = "orange",
-       pch = 3,
-       lwd = 2,
-       cex = 2)
-
-points(F.ref.2009 ~ time.step, 
-       data = out.no.network,
-       col = "red")
-points(y = crit.F * max(out.no.network$F.ref.2009),
-       x = min(which(out.no.network$F.ref.2009 >= crit.F * max(out.no.network$F.ref.2009))),
-       col = "red",
-       pch = 3,
-       lwd = 2,
-       cex = 2)
-
-legend("topright", c("1989", "1999", "2009"), border="black", fill = c("black", "orange", "red"))
-
-# the F-score stays over time after it reached its maximum because the F-score calculation does not include TN
-
 #
 #
 #
@@ -736,7 +651,7 @@ for(i.p in 1:nrow(parameters)){
 
 optim.out.no.network <- optim.output
 
-### with network to copy to other core ====
+### with network (to copy to other core) ---------------------------------------
 parameters <- tidyr::crossing(
   spread.val = c(1, 1.5, 2),
   thresh.disp.factor = c(0.5, 0.75, 1),
@@ -744,7 +659,6 @@ parameters <- tidyr::crossing(
   transformation = c("power.1", "power.1.5", "power.2"),
   net.spread = c(TRUE)
 )
-
 
 for(i.p in 1:nrow(parameters)){
   print(i.p)
@@ -806,7 +720,7 @@ out.full$net.spread <- as.character(out.full$net.spread)
 crit.F <- .975
 #
 #
-## with network ====
+## results with network --------------------------------------------------------
 out.with.network <- out.full %>% 
   dplyr::filter(net.spread == "TRUE")
 out.no.network <- out.full %>% 
@@ -911,7 +825,7 @@ t.test(summary.output$F.ref.1999.ts, summary.output$F.ref.2009.ts, paired = TRUE
 #
 #
 #
-## without network ====
+## results without network -----------------------------------------------------
 plot(F.ref.1989 ~ time.step, 
      data = out.no.network,
      col = alpha("black", .1),
@@ -925,29 +839,7 @@ points(F.ref.2009 ~ time.step,
        data = out.no.network,
        col = alpha("red",.1))
 
-#points(y = crit.F * max(out.no.network$F.ref.1989),
-#       x = out.no.network[min(which(out.no.network$F.ref.1989 >= crit.F * max(out.no.network$F.ref.1989))),]$time.step,
-#       col = "black",
-#       pch = 3,
-#      lwd = 3,
-#       cex = 2)
-#points(y = crit.F * max(out.no.network$F.ref.1999),
-#       x = out.no.network[min(which(out.no.network$F.ref.1999 >= crit.F * max(out.no.network$F.ref.1999))),]$time.step,
-#       col = "orange",
-#       pch = 3,
-#       lwd = 3,
-#       cex = 2)
-#points(y = crit.F * max(out.no.network$F.ref.2009),
-#       x = out.no.network[min(which(out.no.network$F.ref.2009 >= crit.F * max(out.no.network$F.ref.2009))),]$time.step,
-#       col = "red",
-#       pch = 3,
-#       lwd = 3,
-#       cex = 2)
-
 legend("topright", c("1989", "1999", "2009"), border="black", fill = c("black", "orange", "red"))
-
-
-
 
 for(n.r in 1:27) {
   if(n.r == 1){
@@ -1030,6 +922,8 @@ lines(y = c(mean(summary.output$F.ref.2009.F) - sd(summary.output$F.ref.2009.F),
 
 t.test(summary.output$F.ref.1999.ts, summary.output$F.ref.2009.ts, paired = TRUE)
 
+# the F-score stays constant over time after it reached its maximum because the F-score calculation does not include True Negatives
+
 ###
 # end senecio
 ###
@@ -1039,8 +933,7 @@ t.test(summary.output$F.ref.1999.ts, summary.output$F.ref.2009.ts, paired = TRUE
 ###
 
 
-
-# Tapinoma magnum with Seiferts data -------------------------------------------
+# TAPINOMA MAGNUM --------------------------------------------------------------
 ## data preparation ------------------------------------------------------------
 # area of interest (the smaller the faster):
 e <- ext(c(
@@ -1051,7 +944,7 @@ e <- ext(c(
 ))
 
 ### native and non.native areas ------------------------------------------------
-# Info from Manuelas Database:
+# Info from Manuela's Database:
 native <- c("Corse", "Italy", "Sardegna", "Sicily", "Spain") # Sardegna = Sardinia, Corse = Corsica; "Morocco", "Tunisia","Algeria" left out because here only europe
 non.native <- c("Belgium",
                 "France",
@@ -1138,7 +1031,7 @@ gadm.3 <- st_read("data/environmental data/world_gadm_410-levels.gpkg", layer = 
 gadm.3 <- dplyr::bind_rows(gadm.3, gadm.1.add)
 
 
-### occurrence data from Seifert -----------------------------------------------
+### occurrence data from B. Seifert --------------------------------------------
 # transform excel data into a shapefile.
 tapintro <- readxl::read_excel("data/species occurrence data/tapinoma magnum/TAPINTRO [Seifert].xlsx")
 tapinoc <- readxl::read_excel("data/species occurrence data/tapinoma magnum/TAPINO_C [Seifert].xlsx") %>%
@@ -1156,7 +1049,7 @@ comp <- tibble(
 comp$x <- as.numeric(comp$x)
 comp$y <- as.numeric(comp$y)
 
-### occurrence data from Destour et al 2024 ====
+### occurrence data from Destour et al 2024 ------------------------------------
 des <- data.table::fread("data/species occurrence data/tapinoma magnum/tapinoma [Destour et al 2024].csv") |>
   dplyr::filter(Species == "T. magnum")
 des <- tibble(
@@ -1216,9 +1109,9 @@ gbm.r <- 1 / max(values(gbm.r), na.rm = TRUE) * gbm.r # with this step it is set
 gbm.r <- terra::mask(gbm.r, vect(gadm.0))
 gbm.r.inv <- gbm.r * -1 + max(values(gbm.r[[1]]), na.rm = TRUE) # transform (i.e. invert) suitability raster to resistance raster.
 
-spread.limit <- 9999 # set value for areas which cannot be crossed
-gbm.r.inv <- subst(x = gbm.r.inv, # must not have NAs for the function below or it will crash, so replace with spread.limit to make these areas not crossable
-                   from = c(1,NA), to = spread.limit)
+gbm.r.inv <- subst(x = gbm.r.inv, # must not have NAs for the function below or it will crash, so replace with 9999 to make these areas not crossable
+                   from = c(1,NA), 
+                   to = 9999)
 
 gbm.r.inv <- asgrid(
   gbm.r.inv,
@@ -1322,7 +1215,7 @@ ext(ref.dist.r) == ext(empty.r) # check if data match.
 
 spread.val <- 1 # budget for spread used in gridprocess::rawspread()
 thresh.disp.factor <- 0.8 # threshold which has to be reached in a cell to be treated as occupied/presence
-time.steps <- 30 # how many consecutive iterations?
+time.steps <- 2 # how many consecutive iterations?
 min.tr <- quantile(eu.links$predicted, probs = c(0.95), na.rm = TRUE)[[1]] # probs defines which quantile of the traffic volumes is used as minimum traffic value that filter or paths which are used in the traffic network.
 max.dist <- 350000 # paths in the network longer than this will not be used, in meter.
 #
@@ -1359,7 +1252,38 @@ out <- dispersal(
 out[[4]] <- out[[4]] %>% 
   mask(empty.r) 
 
+out[[1]] <- mask(out[[1]], vect(gadm.0))
 
+par(mfrow = c(2,2))
+plot(native.dist.r, 
+     main = "initial distribution", 
+     background = "darkgrey")
+plot(out[[1]], 
+     main = paste0(
+       "s.v:", spread.val, "; ",
+       "init: 1;",
+       "\nmin.tr:", round(min.tr,2), "; ",
+       "max.dist:", max.dist/1000, "km; ",
+       "t.s:", time.steps, ";",
+       "\nt.d.f:", thresh.disp.factor, "; ",
+       "transformation ²"), 
+     background = "darkgrey")
+plot(out[[1]], 
+     main = paste(
+       "s.v =", spread.val, ";",
+       "init = 1;",
+       "t.s =", time.steps, ";",
+       "\nt.d.f =", thresh.disp.factor, ";",
+       "ini.points = green ;",
+       "\nreached ua (sim.) = red"), 
+     background = "darkgrey")
+plot(tap.mag.ini, add = TRUE, col = "green") # starting points
+plot(dplyr::filter(nodes, ID %in% c(out[[2]])), add = TRUE, col = "red")
+plot(ref.dist.r, 
+     main = "final reference distribution", 
+     background = "darkgrey")
+out[[3]]
+plot(out[[4]][[1:2]])
 #
 #
 #
@@ -1371,11 +1295,6 @@ out[[4]] <- out[[4]] %>%
 #
 #
 ## parameter estimation --------------------------------------------------------
-#accuracy.list <- tibble(accuracy = numeric(), 
-#                        spread.val = numeric(),
-#                        thresh.disp.factor = numeric(),
-#                        min.tr = numeric(), 
-#                        max.dist = numeric())
 
 parameters <- tidyr::crossing(
   spread.val = c(1, 1.5, 2),
@@ -1429,56 +1348,27 @@ for(i.p in 1:nrow(parameters)){
   }
 }
 
-write.csv(optim.output,
-          "data/simulation output/tapinoma magnum/optim.output.net.spread.FALSE.csv", 
-          row.names = FALSE)
-
-#
-#
-#
-## plot output -----------------------------------------------------------------
-out[[1]] <- mask(out[[1]], vect(gadm.0))
-
-par(mfrow = c(2,2))
-plot(native.dist.r, 
-     main = "initial distribution", 
-     background = "darkgrey")
-plot(out[[1]], 
-     main = paste0(
-       "s.v:", spread.val, "; ",
-       "init: 1;",
-       "\nmin.tr:", round(min.tr,2), "; ",
-       "max.dist:", max.dist/1000, "km; ",
-       "t.s:", time.steps, ";",
-       "\nt.d.f:", thresh.disp.factor, "; ",
-       "transformation ²"), 
-     background = "darkgrey")
-plot(out[[1]], 
-     main = paste(
-       "s.v =", spread.val, ";",
-       "init = 1;",
-       "t.s =", time.steps, ";",
-       "\nt.d.f =", thresh.disp.factor, ";",
-       "ini.points = green ;",
-       "\nreached ua (sim.) = red"), 
-     background = "darkgrey")
-plot(tap.mag.ini, add = TRUE, col = "green") # starting points
-plot(dplyr::filter(nodes, ID %in% c(out[[2]])), add = TRUE, col = "red")
-plot(ref.dist.r, 
-     main = "final reference distribution", 
-     background = "darkgrey")
-out[[3]]
-out[[4]] <- mask(out[[4]], vect(gadm.0))
-plot(out[[4]][[1:2]])
-#
-#
-#
+#write.csv(optim.output,
+#          "data/simulation output/tapinoma magnum/optim.output.net.spread.FALSE.csv", 
+#          row.names = FALSE)
 
 
-# Myocastor coypus -------------------------------------------------------------
+#
+#
+#
+#
+###
+# end tapinoma
+###
+###
+###
+###
+
+
+# MYOCASTOR COYPUS -------------------------------------------------------------
 ## data preparation ------------------------------------------------------------
 ### native and non.native areas ------------------------------------------------
-# Info from Manuelas Database:
+# Info from Manuela's Database:
 native <- c("Argentina",
             "Bolivia",
             "Brazil",
@@ -1628,7 +1518,6 @@ gbm.r <- subst(gbm.r, NA, 0)
 gbm.r <- aggregate(gbm.r, 5, fun = mean, na.rm = TRUE) # making the raster more coarse; INCLUDE IN ASGRID() BELOW!!
 
 mask.thresh <- 0.5 
-#mask <- aggregate(gbm.r, 5, fun = "mean", na.rm = TRUE)
 # gets the cell numbers; these are then set to 0 (i.e. unoccupied in the result.r in the dispersal() function)
 
 
@@ -1644,14 +1533,12 @@ mask <- which.lyr(gbm.r[[1]] <= mask.thresh) %>%  # gets a spatraster that has o
 gbm.r <- 1 / max(values(gbm.r), na.rm = TRUE) * gbm.r # with this step it is set to a scale of 0 to 1 irrespective of the transformation
 
 gbm.r.inv <- gbm.r*-1 + max(values(gbm.r[[1]]), na.rm = TRUE) # invert raster for creation of resistance matrix
-limit <- max(values(gbm.r.inv), na.rm = TRUE)
 #spread.limit <- limit*100 # set value for areas which are not crossable
-gbm.r.inv <- subst(gbm.r.inv, # must not have NAs for the function below, so replace with spread.limit to make these areas not crossable
+gbm.r.inv <- subst(gbm.r.inv, # must not have NAs for the function below, so replace with 9999 to make these areas not crossable
                    c(1,NA), 9999) # the final
-# plot(gbm.r.inv) # no network visible in plot anymore if limit much higher than maximum value in network becaus of color-scale. reduce spread.limit to make it visible again.
-gbm.r.inv <- asgrid(
+# plot(gbm.r.inv) # no network visible in plot anymore if limit much higher than maximum value in network because of color-scale. reduce spread.limit to make it visible again.
+gbm.r.inv <- asgrid( # convert to grid for spread function
   gbm.r.inv,
-  # convert to grid for spread function
   xll = xmin(gbm.r.inv),
   yll = ymin(gbm.r.inv),
   cellsize = 1000
@@ -1673,9 +1560,6 @@ plot(myo.coy.xy[, 1],
 #
 #
 #
-
-
-
 
 #
 #
@@ -1805,79 +1689,25 @@ out[[3]]
 plot(mask(out[[4]][[4]],vect(gadm.0)),
      background = "darkgrey")
 
+#
+#
+#
+#
+#
+###
+# end myocastor
+###
+###
+###
+###
+
 
 #
 #
 #
 #
 # ADDITIONAL STEPS -------------------------------------------------------------
-#
-#
-#
-## example for optimization-by-hand approach -----------------------------------
-accuracy.list <- tibble(accuracy = numeric(), 
-                        spread.val = numeric(),
-                        thresh.disp.factor = numeric(),
-                        min.tr = numeric(), 
-                        max.dist = numeric())
-
-parameters <- tidyr::crossing(
-  spread.val = c(0.9, 1, 1.5, 2),
-  thresh.disp.factor = c(0.3, 0.6, 0.9),
-  min.tr = c(0.1, 0.5, 0.9),
-  max.dist = c(50000, 250000, 500000)
-)
-
-
-for(i.p in 1:nrow(parameters)){
-  print(i.p)
-  spread.val <- parameters[i.p,]$spread.val
-  thresh.disp.factor <- parameters[i.p,]$thresh.disp.factor
-  time.steps <- 27
-  min.tr <- quantile(eu.links$predicted, probs = c(parameters[i.p,]$min.tr), na.rm = TRUE)[[1]]
-  #min.tr <- 0.5 # derived from the reference distribution (see below)
-  max.dist <- parameters[i.p,]$max.dist
-  
-  out <- dispersal(
-    land.spread = TRUE,
-    net.spread = TRUE,
-    spread.val = spread.val,
-    thresh.disp.factor = thresh.disp.factor, 
-    time.steps = time.steps,
-    dist.ini = sen.ini,
-    ini.nodes = ini.nodes,
-    ref.raster = ref.raster,
-    result.r = empty.r,
-    ref.dist.r = ref.dist.r,
-    plot.result = TRUE, 
-    sample.nodes.from.raster = TRUE,
-    unsuitability.mask = mask,
-    acc.vect = acc.vect,
-    min.tr = min.tr,
-    max.dist = max.dist
-  )
-  
-  if(i.p == 1){
-    out$accuracies$min.tr.quantile <- parameters[i.p,]$min.tr.quantile
-    optim.output <- out$accuracies
-  } else {
-    out$accuracies$min.tr.quantile <- parameters[i.p,]$min.tr.quantile
-    optim.output <- bind_rows(optim.output, out$accuracies)
-  }
-  
-}
-
-save <- optim.output
-# one hundred years later....
-#
-#
-#
-
-
-#
-#
-#
-## better plots with tmap ------------------------------------------------------
+## plotting with tmap ----------------------------------------------------------
 library(tmap)
 out.pol <- as.polygons(out[[4]][[23]]) %>%
   st_as_sf()
