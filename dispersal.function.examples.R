@@ -535,11 +535,11 @@ ini.nodes <- ini.nodes$ID
 
 spread.val <- 1
 thresh.disp.factor <- 0.5
-time.steps <- 4
+time.steps <- 24
 agg.acc.fact <- 1
 acc.vect <- st_union(st_buffer(ref.p, 30000))
-min.tr <- 2.89
-#quantile(eu.links$predicted, probs = 0.95, na.rm = TRUE)[[1]]
+min.tr <- 0.6011832
+min.tr = quantile(eu.links$predicted, probs = 0.05, na.rm = TRUE)[[1]]
 max.dist <- 1000000
 
 ext(ref.dist.r) == ext(empty.r)
@@ -820,7 +820,9 @@ lines(y = c(mean(summary.output$F.ref.2009.F) - sd(summary.output$F.ref.2009.F),
       col = "red",
       lwd = 2)
 
-t.test(summary.output$F.ref.1999.ts, summary.output$F.ref.2009.ts, paired = TRUE)
+t.test(summary.output$F.ref.1999.ts, 
+       summary.output$F.ref.2009.ts, 
+       paired = TRUE)
 
 #
 #
@@ -920,9 +922,13 @@ lines(y = c(mean(summary.output$F.ref.2009.F) - sd(summary.output$F.ref.2009.F),
       lwd = 2)
 
 
-t.test(summary.output$F.ref.1999.ts, summary.output$F.ref.2009.ts, paired = TRUE)
+t.test(summary.output$F.ref.1999.ts, 
+       summary.output$F.ref.2009.ts, 
+       paired = TRUE)
 
 # the F-score stays constant over time after it reached its maximum because the F-score calculation does not include True Negatives
+
+out.full %>% dplyr::filter()
 
 ###
 # end senecio
