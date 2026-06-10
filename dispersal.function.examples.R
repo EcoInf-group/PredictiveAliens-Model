@@ -1383,7 +1383,7 @@ plot(myo.coy.xy[, 1],
 ### read in traffic network ----------------------------------------------------
 eu.links <- st_read("data/traffic data/1031.1165ua.GHS.800km.gpkg", # this is a shapefile with all least-cost paths (i.e. open street map routes) between all pairs of urban areas
                     layer = "1031.1165ua.GHS.800km.exp.predict.w.original.data")
-eu.links$length <- eu.links$original.dist
+distances <- eu.links$length
 eu.links$link.id <- 1:nrow(eu.links) # paths need an ID for easier use later
 eu.links <- eu.links %>%
   rename(o.ID = start.ID)
@@ -1449,7 +1449,8 @@ thresh.disp.factor <- 0.25
 agg.acc.fact <- 40
 acc.vect <- gadm.0
 min.tr <- quantile(eu.links$predicted, probs = c(0.50), na.rm = TRUE)[[1]] # probs defines which quantile of the traffic volumes is used as minimum traffic value that filter or paths which are used in the traffic network.
-max.dist <- 350000 # paths in the network longer than this will not be used, in meter.
+max.dist <- quantile(distances, probs = c(0.99), na.rm = TRUE)[[1]] # irrelevant anyways if net.spread = FALSE, paths in the network longer than this will not be used, in meter.
+#
 
 ## run function ----------------------------------------------------------------
 #out <- dispersal(
